@@ -33,39 +33,60 @@ OUTCOME_ORDER = [
 
 RANK_ORDER = ["low", "mid", "high", "elite", "unknown"]
 
-# Setup profile definitions (evaluated in order; first match wins).
+# Setup profiles are relative — they compare this team's state to the opponent's
+# at T-30s.  Rules are applied in reverse order (last listed = highest priority).
 # Each entry: (profile_name, pandas query string)
 _PROFILE_RULES = [
+    # Both sides absent — nobody committed; one team kills it incidentally
     (
-        "no_setup",
-        "team_nearby_T_30 == 0",
+        "both_absent",
+        "team_nearby_T_30 == 0 and enemy_nearby_T_30 == 0",
     ),
+    # Gave away — we weren't near the objective, enemy was
     (
-        "throw_setup",
-        "team_nearby_T_30 >= 1 and team_deaths_60s >= 1 and jungler_alive_T_60 == 0",
+        "gave_away",
+        "team_nearby_T_30 == 0 and enemy_nearby_T_30 >= 1",
     ),
+    # Free setup with deaths — sole team present but had pre-obj deaths
     (
-        "forced_contest",
-        "team_nearby_T_30 >= 1 and team_alive_T_30 <= 3 and enemy_alive_T_30 >= 4",
+        "free_setup_deaths",
+        "team_nearby_T_30 >= 1 and enemy_nearby_T_30 == 0 and team_deaths_60s >= 1",
     ),
+    # Free setup clean — sole team present, enemy absent, no recent deaths
     (
-        "clean_setup",
-        "jungler_alive_T_60 == 1 and support_alive_T_60 == 1 "
-        "and team_deaths_60s == 0 and arrived_first == 1",
+        "free_setup",
+        "team_nearby_T_30 >= 1 and enemy_nearby_T_30 == 0 and team_deaths_60s == 0",
     ),
+    # Disadvantaged contest — both sides present; we had deaths or fewer alive
     (
-        "coinflip_setup",
+        "disadvantaged",
         "team_nearby_T_30 >= 1 and enemy_nearby_T_30 >= 1 "
-        "and abs(team_nearby_T_30 - enemy_nearby_T_30) <= 1",
+        "and (team_deaths_60s >= 1 or team_alive_T_30 < enemy_alive_T_30)",
+    ),
+    # Clean contest — both sides present; we have no deaths and equal/more alive
+    (
+        "clean_contest",
+        "team_nearby_T_30 >= 1 and enemy_nearby_T_30 >= 1 "
+        "and team_deaths_60s == 0 and team_alive_T_30 >= enemy_alive_T_30",
     ),
 ]
-_PROFILE_DEFAULT = "contested"
+_PROFILE_DEFAULT = "clean_contest"   # catch-all (should be empty with the rules above)
+
+PROFILE_ORDER = [
+    "both_absent", "gave_away",
+    "free_setup", "free_setup_deaths",
+    "clean_contest", "disadvantaged",
+]
 
 
 # ------------------------------------------------------------------ helpers
 
 def assign_setup_profiles(df: Any) -> Any:
-    """Return a Series of setup profile labels for each row."""
+    """Return a Series of relative setup profile labels for each row.
+
+    Profiles compare this team's state to the opponent's at T-30s so that
+    secure rates are meaningful without controlling for opponent presence.
+    """
     import pandas as pd
 
     profiles = pd.Series(_PROFILE_DEFAULT, index=df.index)
@@ -156,13 +177,12 @@ def section_setup_profiles(df: Any, by_rank: bool = True) -> None:
     df = df.copy()
     df["setup_profile"] = assign_setup_profiles(df)
 
-    profile_order = [p for p, _ in _PROFILE_RULES] + [_PROFILE_DEFAULT]
-    rows = _freq_table(df["setup_profile"], profile_order)
+    rows = _freq_table(df["setup_profile"], PROFILE_ORDER)
     _print_table(
         f"Overall (n={len(df)} rows)",
         ["setup_profile", "count", "%"],
         rows,
-        col_widths=[20, 8, 8],
+        col_widths=[22, 8, 8],
     )
 
     if not by_rank:
@@ -174,12 +194,12 @@ def section_setup_profiles(df: Any, by_rank: bool = True) -> None:
 
     for rank in ranks_present:
         sub = df[df["rank_bucket"] == rank]
-        rows = _freq_table(sub["setup_profile"], profile_order)
+        rows = _freq_table(sub["setup_profile"], PROFILE_ORDER)
         _print_table(
             f"rank_bucket = {rank!r} (n={len(sub)})",
             ["setup_profile", "count", "%"],
             rows,
-            col_widths=[20, 8, 8],
+            col_widths=[22, 8, 8],
         )
 
     return df  # caller can use the annotated df

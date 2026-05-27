@@ -81,19 +81,18 @@ def test_feature_and_label_columns_distinct():
         assert r.outcome_label != ""
 
 
-def test_previous_dragons_count():
-    """Dragon 2 rows report previous_dragons_team/enemy from dragon 1 result."""
+def test_previous_same_obj_count():
+    """Dragon 2 rows report previous_same_obj_team/enemy from dragon 1 result."""
     match, tl = _make_two_dragons()
     rows = build_rows_for_match(match, tl)
-    # Dragon 2 rows
     d2_rows = [r for r in rows if r.objective_number == 2]
     assert len(d2_rows) == 2
     by_team = {r.team_id: r for r in d2_rows}
     # Team 100 took dragon 1
-    assert by_team[100].previous_dragons_team == 1
-    assert by_team[100].previous_dragons_enemy == 0
-    assert by_team[200].previous_dragons_team == 0
-    assert by_team[200].previous_dragons_enemy == 1
+    assert by_team[100].previous_same_obj_team == 1
+    assert by_team[100].previous_same_obj_enemy == 0
+    assert by_team[200].previous_same_obj_team == 0
+    assert by_team[200].previous_same_obj_enemy == 1
 
 
 def test_match_id_isolation():

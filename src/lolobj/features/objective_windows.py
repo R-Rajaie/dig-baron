@@ -78,34 +78,67 @@ class ObjectiveWindowRow:
     rank_bucket: str
     patch: str
 
+    monster_subtype: str = ""   # dragon element (FIRE_DRAGON, etc.) or "" for non-dragons
+
+    # Numbers advantage
     team_alive_T_30: int = 0
+    team_alive_T_60: int = 0
     enemy_alive_T_30: int = 0
+    enemy_alive_T_60: int = 0
+    jungler_alive_T_30: int = 0
     jungler_alive_T_60: int = 0
+    support_alive_T_30: int = 0
     support_alive_T_60: int = 0
     team_deaths_30s: int = 0
     team_deaths_60s: int = 0
     team_deaths_90s: int = 0
+    enemy_deaths_30s: int = 0
     enemy_deaths_60s: int = 0
 
+    # Tempo / arrival
     team_nearby_T_90: int = 0
     team_nearby_T_60: int = 0
     team_nearby_T_30: int = 0
+    enemy_nearby_T_90: int = 0
+    enemy_nearby_T_60: int = 0
     enemy_nearby_T_30: int = 0
+    jungler_dist_T_30: float | None = None
     jungler_dist_T_60: float | None = None
+    support_dist_T_30: float | None = None
     support_dist_T_60: float | None = None
+    mid_dist_T_30: float | None = None
     mid_dist_T_60: float | None = None
     arrived_first: int = 0
 
-    gold_diff_T_60: int = 0
+    # Combat power
     gold_diff_T_30: int = 0
+    gold_diff_T_60: int = 0
+    jungler_level_diff_T_30: int | None = None
     jungler_level_diff_T_60: int | None = None
 
+    # Vision
     wards_placed_120s: int = 0
     wards_killed_120s: int = 0
 
-    previous_dragons_team: int = 0
-    previous_dragons_enemy: int = 0
+    # Prior context (same objective type, before T)
+    previous_same_obj_team: int = 0
+    previous_same_obj_enemy: int = 0
 
+    # Unspent gold per role at T-30 and T-60
+    jungler_unspent_gold_T_30: int | None = None
+    jungler_unspent_gold_T_60: int | None = None
+    support_unspent_gold_T_30: int | None = None
+    support_unspent_gold_T_60: int | None = None
+    adc_unspent_gold_T_30: int | None = None
+    adc_unspent_gold_T_60: int | None = None
+    mid_unspent_gold_T_30: int | None = None
+    mid_unspent_gold_T_60: int | None = None
+    top_unspent_gold_T_30: int | None = None
+    top_unspent_gold_T_60: int | None = None
+    team_unspent_gold_T_30: int = 0
+    team_unspent_gold_T_60: int = 0
+
+    # Labels
     secured: int = 0
     outcome_label: str = ""
     net_value: int = 0
@@ -118,28 +151,31 @@ def build_rows_for_match(
     timeline_payload: dict[str, Any],
     *,
     rank_bucket_by_team: dict[int, str] | None = None,
-    objective_filter: Iterable[tuple[str, int]] = (("DRAGON", 1), ("DRAGON", 2)),
+    objective_filter: Iterable[tuple[str, int]] | None = (("DRAGON", 1), ("DRAGON", 2)),
 ) -> list[ObjectiveWindowRow]:
     """Build objective-window rows for one match.
 
     ``rank_bucket_by_team`` maps team_id -> bucket string (low/mid/high/elite);
     if absent, rank_bucket defaults to "unknown".
     ``objective_filter`` is an iterable of (monster_type, ordinal) pairs to keep.
+    Pass ``None`` to include every non-elder objective (all dragons, herald, baron, grubs).
     """
     timeline = parse_timeline(timeline_payload, match_payload)
     tracks = build_tracks(timeline)
     meta = sf.participant_meta_from_match(match_payload)
     meta_team_ids = {pid: m.team_id for pid, m in meta.items()}
-
     info = match_payload.get("info", {}) or {}
     patch = str(info.get("gameVersion", ""))
     match_id = (match_payload.get("metadata", {}) or {}).get("matchId", "")
 
     events = extract_objective_events(timeline)
-    keep = set(objective_filter)
-    target_events = [
-        e for e in events if (e.monster_type, e.ordinal) in keep and not e.is_elder
-    ]
+    if objective_filter is None:
+        target_events = [e for e in events if not e.is_elder]
+    else:
+        keep = set(objective_filter)
+        target_events = [
+            e for e in events if (e.monster_type, e.ordinal) in keep and not e.is_elder
+        ]
 
     rows: list[ObjectiveWindowRow] = []
     for ev in target_events:
@@ -195,28 +231,45 @@ def _build_one_row(
         team_side="blue" if team_id == 100 else "red",
         rank_bucket=rank,
         patch=patch,
+        monster_subtype=ev.monster_subtype or "",
     )
 
     # ---- Numbers advantage ----
     row.team_alive_T_30 = sf.alive_count(tracks, team_pids, t_minus(30))
+    row.team_alive_T_60 = sf.alive_count(tracks, team_pids, t_minus(60))
     row.enemy_alive_T_30 = sf.alive_count(tracks, enemy_pids, t_minus(30))
+    row.enemy_alive_T_60 = sf.alive_count(tracks, enemy_pids, t_minus(60))
+    row.jungler_alive_T_30 = sf.role_alive(tracks, meta, team_id, sf.JUNGLE, t_minus(30))
     row.jungler_alive_T_60 = sf.role_alive(tracks, meta, team_id, sf.JUNGLE, t_minus(60))
+    row.support_alive_T_30 = sf.role_alive(tracks, meta, team_id, sf.SUPPORT, t_minus(30))
     row.support_alive_T_60 = sf.role_alive(tracks, meta, team_id, sf.SUPPORT, t_minus(60))
     row.team_deaths_30s = sf.deaths_in_last_n_seconds(tracks, team_pids, T, 30)
     row.team_deaths_60s = sf.deaths_in_last_n_seconds(tracks, team_pids, T, 60)
     row.team_deaths_90s = sf.deaths_in_last_n_seconds(tracks, team_pids, T, 90)
+    row.enemy_deaths_30s = sf.deaths_in_last_n_seconds(tracks, enemy_pids, T, 30)
     row.enemy_deaths_60s = sf.deaths_in_last_n_seconds(tracks, enemy_pids, T, 60)
 
     # ---- Tempo / arrival ----
     row.team_nearby_T_90 = sf.nearby_champion_count(tracks, team_pids, obj_pos, t_minus(90))
     row.team_nearby_T_60 = sf.nearby_champion_count(tracks, team_pids, obj_pos, t_minus(60))
     row.team_nearby_T_30 = sf.nearby_champion_count(tracks, team_pids, obj_pos, t_minus(30))
+    row.enemy_nearby_T_90 = sf.nearby_champion_count(tracks, enemy_pids, obj_pos, t_minus(90))
+    row.enemy_nearby_T_60 = sf.nearby_champion_count(tracks, enemy_pids, obj_pos, t_minus(60))
     row.enemy_nearby_T_30 = sf.nearby_champion_count(tracks, enemy_pids, obj_pos, t_minus(30))
+    row.jungler_dist_T_30 = sf.role_distance_to_objective(
+        tracks, meta, team_id, sf.JUNGLE, obj_pos, t_minus(30)
+    )
     row.jungler_dist_T_60 = sf.role_distance_to_objective(
         tracks, meta, team_id, sf.JUNGLE, obj_pos, t_minus(60)
     )
+    row.support_dist_T_30 = sf.role_distance_to_objective(
+        tracks, meta, team_id, sf.SUPPORT, obj_pos, t_minus(30)
+    )
     row.support_dist_T_60 = sf.role_distance_to_objective(
         tracks, meta, team_id, sf.SUPPORT, obj_pos, t_minus(60)
+    )
+    row.mid_dist_T_30 = sf.role_distance_to_objective(
+        tracks, meta, team_id, sf.MIDDLE, obj_pos, t_minus(30)
     )
     row.mid_dist_T_60 = sf.role_distance_to_objective(
         tracks, meta, team_id, sf.MIDDLE, obj_pos, t_minus(60)
@@ -226,12 +279,12 @@ def _build_one_row(
     row.arrived_first = int(row.team_nearby_T_30 > row.enemy_nearby_T_30)
 
     # ---- Combat power ----
-    row.gold_diff_T_60 = sf.team_gold_diff(timeline, meta, team_id, t_minus(60))
     row.gold_diff_T_30 = sf.team_gold_diff(timeline, meta, team_id, t_minus(30))
+    row.gold_diff_T_60 = sf.team_gold_diff(timeline, meta, team_id, t_minus(60))
+    row.jungler_level_diff_T_30 = sf.jungler_level_diff(timeline, meta, team_id, t_minus(30))
     row.jungler_level_diff_T_60 = sf.jungler_level_diff(timeline, meta, team_id, t_minus(60))
 
     # ---- Vision ----
-    # Window for vision: T-120 .. T (exclusive). Excludes the moment of the kill itself.
     row.wards_placed_120s = vf.wards_placed_near_objective(
         timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(120), T
     )
@@ -239,15 +292,28 @@ def _build_one_row(
         timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(120), T
     )
 
-    # ---- Prior dragons (count dragon kills before T, excluding ev) ----
-    prior_dragons = [
+    # ---- Prior context (same objective type, before T) ----
+    prior_same = [
         e for e in all_events
-        if e.monster_type == DRAGON and not e.is_elder and e.timestamp_ms < T
+        if e.monster_type == ev.monster_type and not e.is_elder and e.timestamp_ms < T
     ]
-    row.previous_dragons_team = sum(1 for e in prior_dragons if e.killer_team_id == team_id)
-    row.previous_dragons_enemy = sum(1 for e in prior_dragons if e.killer_team_id == enemy_team)
+    row.previous_same_obj_team = sum(1 for e in prior_same if e.killer_team_id == team_id)
+    row.previous_same_obj_enemy = sum(1 for e in prior_same if e.killer_team_id == enemy_team)
 
-    # ---- Outcome + net value (post-objective; only used as labels, not features) ----
+    # ---- Unspent gold per role ----
+    for role, attr in (
+        (sf.JUNGLE, "jungler"),
+        (sf.SUPPORT, "support"),
+        (sf.BOTTOM, "adc"),
+        (sf.MIDDLE, "mid"),
+        (sf.TOP, "top"),
+    ):
+        setattr(row, f"{attr}_unspent_gold_T_30", sf.role_current_gold(timeline, meta, team_id, role, t_minus(30)))
+        setattr(row, f"{attr}_unspent_gold_T_60", sf.role_current_gold(timeline, meta, team_id, role, t_minus(60)))
+    row.team_unspent_gold_T_30 = sf.team_current_gold(timeline, meta, team_id, t_minus(30))
+    row.team_unspent_gold_T_60 = sf.team_current_gold(timeline, meta, team_id, t_minus(60))
+
+    # ---- Outcome + net value (labels, not features) ----
     row.secured = int(ev.killer_team_id == team_id)
     row.outcome_label = classify_outcome(
         ev, team_id, timeline, meta_team_ids, tracks
@@ -288,7 +354,11 @@ def build_table_from_cache(
             continue
         try:
             rank_bucket_by_team = _rank_bucket_by_team(match, puuid_buckets)
-            rows = build_rows_for_match(match, timeline, rank_bucket_by_team=rank_bucket_by_team)
+            rows = build_rows_for_match(
+                match, timeline,
+                rank_bucket_by_team=rank_bucket_by_team,
+                objective_filter=None,
+            )
         except Exception:
             logger.exception("Failed to build rows for %s", match_id)
             continue
@@ -300,7 +370,11 @@ def _rank_bucket_by_team(
     match_payload: dict[str, Any],
     puuid_buckets: dict[str, str],
 ) -> dict[int, str]:
-    """Derive {team_id: rank_bucket} from match participants and the stored puuid mapping."""
+    """Derive {team_id: rank_bucket} from match participants and the stored puuid mapping.
+
+    If only one team has a known bucket, the other is inferred from it — ranked
+    matchmaking pairs similar-rank players so this is a reasonable approximation.
+    """
     result: dict[int, str] = {}
     participants = (match_payload.get("info") or {}).get("participants", [])
     for p in participants:
@@ -308,6 +382,11 @@ def _rank_bucket_by_team(
         bucket = puuid_buckets.get(puuid)
         if bucket:
             result[p.get("teamId", 0)] = bucket
+    if len(result) == 1:
+        known = next(iter(result.values()))
+        for team_id in (100, 200):
+            if team_id not in result:
+                result[team_id] = known
     return result
 
 

@@ -60,8 +60,8 @@ def classify_outcome(
     team_nearby = sf.nearby_champion_count(tracks, team_pids, obj_pos, t_minus_30)
     enemy_nearby = sf.nearby_champion_count(tracks, enemy_pids, obj_pos, t_minus_30)
 
-    # Deaths in [T-90, T) — pre-fight, exclusive of T
-    pre_obj_deaths = _deaths_in_window(tracks, team_pids, max(0, T - 90_000), T)
+    # Deaths in [T-30, T) — critical window; T-60+ has near-zero correlation with outcome
+    pre_obj_deaths = _deaths_in_window(tracks, team_pids, max(0, T - 30_000), T)
 
     fight_from, fight_to = T - 30_000, T + 30_000
     kills_fight = tf.kills_in_window(timeline, team_id, fight_from, fight_to)
@@ -79,9 +79,12 @@ def classify_outcome(
     if team_nearby == 0 and enemy_nearby == 0:
         return "no_meaningful_contest"
 
-    # 2. Team not present — gave the objective
+    # 2. Team not present at T-30 — gave the objective (or smite-stole from fog)
     if team_nearby == 0:
-        if not secured and meaningful_trade:
+        if secured:
+            # Arrived/smited from outside the nearby radius — counts as a steal
+            return "objective_steal"
+        if meaningful_trade:
             return "good_trade"
         return "clean_give"
 

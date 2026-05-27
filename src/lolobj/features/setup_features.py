@@ -30,6 +30,9 @@ MIDDLE = "MIDDLE"
 BOTTOM = "BOTTOM"
 TOP = "TOP"
 
+FLASH_ID = 4
+SMITE_ID = 11
+
 
 @dataclass
 class ParticipantMeta:
@@ -170,6 +173,61 @@ def team_gold_diff(
     return team_total_gold(timeline, meta, team_id, t_ms) - team_total_gold(
         timeline, meta, other, t_ms
     )
+
+
+def role_current_gold(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, role: str, t_ms: int
+) -> int | None:
+    """Unspent (current) gold held by the given role at the frame <= t_ms."""
+    pid = role_participant(meta, team_id, role)
+    if pid is None:
+        return None
+    for f in reversed(timeline.frames):
+        if f.timestamp_ms <= t_ms:
+            pf = f.participant_frames.get(pid)
+            return pf.current_gold if pf is not None else None
+    return None
+
+
+def team_current_gold(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, t_ms: int
+) -> int:
+    """Sum of unspent gold across all team members at the frame <= t_ms."""
+    pids = participants_on_team(meta, team_id)
+    for f in reversed(timeline.frames):
+        if f.timestamp_ms <= t_ms:
+            return sum(
+                int(f.participant_frames[pid].current_gold)
+                for pid in pids
+                if pid in f.participant_frames
+            )
+    return 0
+
+
+def participant_summoner_spells(match_payload: dict) -> dict[int, tuple[int, int]]:
+    """Return {participant_id: (summoner1_id, summoner2_id)} from match info."""
+    info = match_payload.get("info", {}) or {}
+    out: dict[int, tuple[int, int]] = {}
+    for p in info.get("participants", []) or []:
+        pid = int(p.get("participantId", 0))
+        s1 = int(p.get("summoner1Id", 0))
+        s2 = int(p.get("summoner2Id", 0))
+        out[pid] = (s1, s2)
+    return out
+
+
+def role_has_flash(
+    summoner_spells: dict[int, tuple[int, int]],
+    meta: dict[int, ParticipantMeta],
+    team_id: int,
+    role: str,
+) -> int:
+    """Return 1 if the player in ``role`` on ``team_id`` has Flash equipped, else 0."""
+    pid = role_participant(meta, team_id, role)
+    if pid is None or pid not in summoner_spells:
+        return 0
+    s1, s2 = summoner_spells[pid]
+    return int(s1 == FLASH_ID or s2 == FLASH_ID)
 
 
 def jungler_level_diff(
