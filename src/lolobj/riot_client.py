@@ -22,6 +22,21 @@ from .config import RiotConfig, load_riot_config
 
 logger = logging.getLogger(__name__)
 
+# Maps platform routing value → regional routing value.
+PLATFORM_TO_REGION: dict[str, str] = {
+    "na1": "americas", "br1": "americas", "la1": "americas", "la2": "americas",
+    "euw1": "europe",  "eun1": "europe",  "tr1": "europe",  "ru": "europe",
+    "kr":  "asia",     "jp1": "asia",
+    "oc1": "sea",
+}
+
+
+class RateLimitError(Exception):
+    """Raised when a 429 is received and ``raise_on_rate_limit`` is set."""
+    def __init__(self, retry_after: float) -> None:
+        self.retry_after = retry_after
+        super().__init__(f"rate limited; retry after {retry_after:.1f}s")
+
 
 @dataclass
 class _RateLimit:
@@ -66,6 +81,7 @@ class RiotClient:
         rate_limits: Iterable[tuple[int, float]] | None = None,
         max_retries: int = 5,
         session: requests.Session | None = None,
+        raise_on_rate_limit: bool = False,
     ) -> None:
         self.config = config or load_riot_config()
         self.session = session or requests.Session()
@@ -73,6 +89,7 @@ class RiotClient:
         limits = tuple(rate_limits) if rate_limits is not None else self.DEFAULT_LIMITS
         self._limits = [_RateLimit(n, w) for n, w in limits]
         self.max_retries = max_retries
+        self.raise_on_rate_limit = raise_on_rate_limit
 
     # ------------------------------------------------------------------ HTTP
 
@@ -87,6 +104,8 @@ class RiotClient:
                 return resp.json()
             if resp.status_code == 429:
                 retry_after = float(resp.headers.get("Retry-After", "1"))
+                if self.raise_on_rate_limit:
+                    raise RateLimitError(retry_after)
                 logger.warning("429 from Riot, sleeping %.1fs", retry_after)
                 time.sleep(retry_after)
                 continue
@@ -133,4 +152,38 @@ class RiotClient:
 
     def get_match_timeline(self, match_id: str) -> dict[str, Any]:
         url = f"{self.config.region_host}/lol/match/v5/matches/{match_id}/timeline"
+        return self._request(url)
+
+    # ---------------------------------------------------------- Summoner / League
+
+    def get_summoner_by_id(self, summoner_id: str) -> dict[str, Any]:
+        """Summoner-V4: resolve summonerId → puuid (and other fields)."""
+        url = f"{self.config.platform_host}/lol/summoner/v4/summoners/{summoner_id}"
+        return self._request(url)
+
+    def get_league_entries(
+        self,
+        tier: str,
+        division: str,
+        queue: str = "RANKED_SOLO_5x5",
+        page: int = 1,
+    ) -> list[dict[str, Any]]:
+        """League-V4 entries for a tier/division page (Iron–Diamond only).
+
+        ``tier`` is uppercase, e.g. ``"GOLD"``.
+        ``division`` is ``"I"`` / ``"II"`` / ``"III"`` / ``"IV"``.
+        Returns a list of league-entry dicts, each containing ``summonerId``.
+        """
+        url = f"{self.config.platform_host}/lol/league/v4/entries/{queue}/{tier}/{division}"
+        return self._request(url, params={"page": page})
+
+    def get_apex_league(self, tier: str, queue: str = "RANKED_SOLO_5x5") -> dict[str, Any]:
+        """League-V4 full league for Master / Grandmaster / Challenger.
+
+        Returns a league object whose ``entries`` list contains ``summonerId``.
+        """
+        tier_lower = tier.lower()
+        if tier_lower not in ("master", "grandmaster", "challenger"):
+            raise ValueError(f"get_apex_league only supports master/grandmaster/challenger, got {tier!r}")
+        url = f"{self.config.platform_host}/lol/league/v4/{tier_lower}leagues/by-queue/{queue}"
         return self._request(url)

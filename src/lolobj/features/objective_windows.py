@@ -62,7 +62,6 @@ from ..parsing.timeline_parser import Timeline, parse_timeline
 from . import setup_features as sf
 from . import trade_features as tf
 from . import vision_features as vf
-from .rank_features import rank_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -118,12 +117,13 @@ def build_rows_for_match(
     match_payload: dict[str, Any],
     timeline_payload: dict[str, Any],
     *,
-    rank_tier_by_team: dict[int, str] | None = None,
+    rank_bucket_by_team: dict[int, str] | None = None,
     objective_filter: Iterable[tuple[str, int]] = (("DRAGON", 1), ("DRAGON", 2)),
 ) -> list[ObjectiveWindowRow]:
     """Build objective-window rows for one match.
 
-    ``rank_tier_by_team`` is optional; if absent, rank_bucket is "unknown".
+    ``rank_bucket_by_team`` maps team_id -> bucket string (low/mid/high/elite);
+    if absent, rank_bucket defaults to "unknown".
     ``objective_filter`` is an iterable of (monster_type, ordinal) pairs to keep.
     """
     timeline = parse_timeline(timeline_payload, match_payload)
@@ -154,7 +154,7 @@ def build_rows_for_match(
                     meta_team_ids=meta_team_ids,
                     patch=patch,
                     match_id=match_id,
-                    rank_tier_by_team=rank_tier_by_team,
+                    rank_bucket_by_team=rank_bucket_by_team,
                     all_events=events,
                 )
             )
@@ -171,7 +171,7 @@ def _build_one_row(
     meta_team_ids: dict[int, int],
     patch: str,
     match_id: str,
-    rank_tier_by_team: dict[int, str] | None,
+    rank_bucket_by_team: dict[int, str] | None,
     all_events: list[ObjectiveEvent],
 ) -> ObjectiveWindowRow:
     enemy_team = 200 if team_id == 100 else 100
@@ -183,7 +183,7 @@ def _build_one_row(
 
     t_minus = lambda s: max(0, T - s * 1000)  # noqa: E731
 
-    rank = rank_bucket((rank_tier_by_team or {}).get(team_id))
+    rank = (rank_bucket_by_team or {}).get(team_id, "unknown")
 
     row = ObjectiveWindowRow(
         match_id=match_id or ev.match_id,
@@ -272,6 +272,7 @@ def build_table_from_cache(
     match_ids: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
     raw_root = raw_root or RAW_DIR
+    puuid_buckets = storage.load_puuid_buckets(raw_root)
     out: list[dict[str, Any]] = []
     ids: Iterable[str]
     if match_ids is not None:
@@ -286,12 +287,28 @@ def build_table_from_cache(
             logger.warning("Missing match or timeline for %s", match_id)
             continue
         try:
-            rows = build_rows_for_match(match, timeline)
+            rank_bucket_by_team = _rank_bucket_by_team(match, puuid_buckets)
+            rows = build_rows_for_match(match, timeline, rank_bucket_by_team=rank_bucket_by_team)
         except Exception:
             logger.exception("Failed to build rows for %s", match_id)
             continue
         out.extend(_row_to_dict(r) for r in rows)
     return out
+
+
+def _rank_bucket_by_team(
+    match_payload: dict[str, Any],
+    puuid_buckets: dict[str, str],
+) -> dict[int, str]:
+    """Derive {team_id: rank_bucket} from match participants and the stored puuid mapping."""
+    result: dict[int, str] = {}
+    participants = (match_payload.get("info") or {}).get("participants", [])
+    for p in participants:
+        puuid = p.get("puuid", "")
+        bucket = puuid_buckets.get(puuid)
+        if bucket:
+            result[p.get("teamId", 0)] = bucket
+    return result
 
 
 def _write_output(rows: list[dict[str, Any]], path: Path) -> None:
