@@ -293,8 +293,11 @@ def _build_one_row(
         tracks, meta, team_id, sf.MIDDLE, obj_pos, t_minus(60)
     )
 
-    # arrived_first: at T-30, does this team have more nearby members than enemy?
-    row.arrived_first = int(row.team_nearby_T_30 > row.enemy_nearby_T_30)
+    # arrived_first: at T-60, did this team have superior presence before fight setup?
+    # Distinct from numbers_adv_T_30 (T-30 count advantage); captures early rotation.
+    row.arrived_first = int(
+        row.team_nearby_T_60 >= 1 and row.team_nearby_T_60 > row.enemy_nearby_T_60
+    )
 
     # ---- Combat power ----
     row.gold_diff_T_30 = sf.team_gold_diff(timeline, meta, team_id, t_minus(30))

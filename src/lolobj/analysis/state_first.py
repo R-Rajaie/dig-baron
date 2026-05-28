@@ -48,6 +48,14 @@ def make_state_first_frame(df: pd.DataFrame) -> pd.DataFrame:
             return False
         return True
 
+    # ---- Arrival (T-60: early positioning before setup commits) ----------------
+    # Recompute from T-60 columns so it is distinct from numbers_adv_T_30 (T-30).
+    # arrived_first = team had >= 1 nearby and more than enemy at T-60.
+    if _need("team_nearby_T_60", "enemy_nearby_T_60"):
+        out["arrived_first"] = (
+            (out["team_nearby_T_60"] >= 1) & (out["team_nearby_T_60"] > out["enemy_nearby_T_60"])
+        ).astype(int)
+
     # ---- Action / setup (T-30 window: what teams chose between T-60 and T-30) --
 
     if _need("team_nearby_T_30", "enemy_nearby_T_30"):
