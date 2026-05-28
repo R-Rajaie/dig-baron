@@ -27,8 +27,9 @@ Columns (priority feature set from CLAUDE.md):
     gold_diff_T_60, gold_diff_T_30,
     jungler_level_diff_T_60,
 
-    # Vision
-    wards_placed_120s, wards_killed_120s,
+    # Vision (T-30 and T-60 windows before the objective)
+    wards_placed_T_30, wards_placed_T_60,
+    wards_killed_T_30, wards_killed_T_60,
 
     # Prior context
     previous_dragons_team, previous_dragons_enemy,
@@ -117,8 +118,25 @@ class ObjectiveWindowRow:
     jungler_level_diff_T_60: int | None = None
 
     # Vision
-    wards_placed_120s: int = 0
-    wards_killed_120s: int = 0
+    wards_placed_T_30: int = 0
+    wards_placed_T_60: int = 0
+    wards_killed_T_30: int = 0
+    wards_killed_T_60: int = 0
+    # Control wards (pink wards) placed by this team — stronger vision signal
+    control_wards_T_30: int = 0
+    control_wards_T_60: int = 0
+    # Enemy wards placed near objective — their vision investment
+    enemy_wards_placed_T_30: int = 0
+    enemy_wards_placed_T_60: int = 0
+
+    # Wallet advantage
+    xp_diff_T_30: int = 0
+    xp_diff_T_60: int = 0
+    avg_level_diff_T_30: float | None = None
+    cs_diff_T_30: int = 0
+    cs_diff_T_60: int = 0
+    gold_spent_diff_T_30: int = 0
+    gold_spent_diff_T_60: int = 0
 
     # Prior context (same objective type, before T)
     previous_same_obj_team: int = 0
@@ -285,12 +303,41 @@ def _build_one_row(
     row.jungler_level_diff_T_60 = sf.jungler_level_diff(timeline, meta, team_id, t_minus(60))
 
     # ---- Vision ----
-    row.wards_placed_120s = vf.wards_placed_near_objective(
-        timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(120), T
+    row.wards_placed_T_30 = vf.wards_placed_near_objective(
+        timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(30), T
     )
-    row.wards_killed_120s = vf.wards_killed_near_objective(
-        timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(120), T
+    row.wards_placed_T_60 = vf.wards_placed_near_objective(
+        timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(60), T
     )
+    row.wards_killed_T_30 = vf.wards_killed_near_objective(
+        timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(30), T
+    )
+    row.wards_killed_T_60 = vf.wards_killed_near_objective(
+        timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(60), T
+    )
+    row.control_wards_T_30 = vf.wards_placed_near_objective(
+        timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(30), T,
+        ward_types=vf.CONTROL_WARD_TYPE,
+    )
+    row.control_wards_T_60 = vf.wards_placed_near_objective(
+        timeline, tracks, meta_team_ids, team_id, obj_pos, t_minus(60), T,
+        ward_types=vf.CONTROL_WARD_TYPE,
+    )
+    row.enemy_wards_placed_T_30 = vf.wards_placed_near_objective(
+        timeline, tracks, meta_team_ids, enemy_team, obj_pos, t_minus(30), T
+    )
+    row.enemy_wards_placed_T_60 = vf.wards_placed_near_objective(
+        timeline, tracks, meta_team_ids, enemy_team, obj_pos, t_minus(60), T
+    )
+
+    # ---- Wallet advantage ----
+    row.xp_diff_T_30 = sf.xp_diff(timeline, meta, team_id, t_minus(30))
+    row.xp_diff_T_60 = sf.xp_diff(timeline, meta, team_id, t_minus(60))
+    row.avg_level_diff_T_30 = sf.avg_level_diff(timeline, meta, team_id, t_minus(30))
+    row.cs_diff_T_30 = sf.cs_diff(timeline, meta, team_id, t_minus(30))
+    row.cs_diff_T_60 = sf.cs_diff(timeline, meta, team_id, t_minus(60))
+    row.gold_spent_diff_T_30 = sf.gold_spent_diff(timeline, meta, team_id, t_minus(30))
+    row.gold_spent_diff_T_60 = sf.gold_spent_diff(timeline, meta, team_id, t_minus(60))
 
     # ---- Prior context (same objective type, before T) ----
     prior_same = [

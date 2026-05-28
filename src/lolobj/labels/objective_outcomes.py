@@ -94,12 +94,13 @@ def classify_outcome(
     if secured and enemy_nearby >= team_nearby + 2:
         return "objective_steal"
 
-    # Secured but surrounding fight was lost
-    if secured and deaths_fight > kills_fight:
+    # Secured but surrounding fight was lost — only meaningful when enemy was present;
+    # without enemy_nearby >= 1 the deaths came from elsewhere on the map, not this fight.
+    if secured and enemy_nearby >= 1 and deaths_fight > kills_fight:
         return "lost_fight_got_objective"
 
     # Won the fight but lost the objective (enemy steal)
-    if not secured and kills_fight > deaths_fight:
+    if not secured and enemy_nearby >= 1 and kills_fight > deaths_fight:
         return "won_fight_lost_objective"
 
     # Pre-fight deaths led to losing the objective

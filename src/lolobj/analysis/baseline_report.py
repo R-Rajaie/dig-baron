@@ -33,37 +33,19 @@ OUTCOME_ORDER = [
 
 RANK_ORDER = ["low", "mid", "high", "elite", "unknown"]
 
-# Setup profiles are relative — they compare this team's state to the opponent's
-# at T-30s.  Rules are applied in reverse order (last listed = highest priority).
-# Each entry: (profile_name, pandas query string)
+# Setup profiles compare this team's state to the opponent's at T-30.
+# Presence check (nearby_T_30) captures who showed up to fight.
+# Rules applied in reverse order (last listed = highest priority).
 _PROFILE_RULES = [
-    # Both sides absent — nobody committed; one team kills it incidentally
-    (
-        "both_absent",
-        "team_nearby_T_30 == 0 and enemy_nearby_T_30 == 0",
-    ),
-    # Gave away — we weren't near the objective, enemy was
-    (
-        "gave_away",
-        "team_nearby_T_30 == 0 and enemy_nearby_T_30 >= 1",
-    ),
-    # Free setup with deaths — sole team present but had pre-obj deaths
-    (
-        "free_setup_deaths",
-        "team_nearby_T_30 >= 1 and enemy_nearby_T_30 == 0 and team_deaths_60s >= 1",
-    ),
-    # Free setup clean — sole team present, enemy absent, no recent deaths
-    (
-        "free_setup",
-        "team_nearby_T_30 >= 1 and enemy_nearby_T_30 == 0 and team_deaths_60s == 0",
-    ),
-    # Disadvantaged contest — both sides present; we had deaths or fewer alive
+    ("both_absent", "team_nearby_T_30 == 0 and enemy_nearby_T_30 == 0"),
+    ("gave_away", "team_nearby_T_30 == 0 and enemy_nearby_T_30 >= 1"),
+    ("free_setup_deaths", "team_nearby_T_30 >= 1 and enemy_nearby_T_30 == 0 and team_deaths_60s >= 1"),
+    ("free_setup", "team_nearby_T_30 >= 1 and enemy_nearby_T_30 == 0 and team_deaths_60s == 0"),
     (
         "disadvantaged",
         "team_nearby_T_30 >= 1 and enemy_nearby_T_30 >= 1 "
         "and (team_deaths_60s >= 1 or team_alive_T_30 < enemy_alive_T_30)",
     ),
-    # Clean contest — both sides present; we have no deaths and equal/more alive
     (
         "clean_contest",
         "team_nearby_T_30 >= 1 and enemy_nearby_T_30 >= 1 "
@@ -82,15 +64,10 @@ PROFILE_ORDER = [
 # ------------------------------------------------------------------ helpers
 
 def assign_setup_profiles(df: Any) -> Any:
-    """Return a Series of relative setup profile labels for each row.
-
-    Profiles compare this team's state to the opponent's at T-30s so that
-    secure rates are meaningful without controlling for opponent presence.
-    """
+    """Return a Series of setup profile labels for each row."""
     import pandas as pd
 
     profiles = pd.Series(_PROFILE_DEFAULT, index=df.index)
-    # Apply in reverse order so earlier (higher-priority) rules overwrite later ones.
     for name, query in reversed(_PROFILE_RULES):
         mask = df.eval(query)
         profiles[mask] = name

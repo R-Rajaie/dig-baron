@@ -246,3 +246,86 @@ def jungler_level_diff(
                 return None
             return own.level - en.level
     return None
+
+
+# ---------------------------------------------------------------- wallet advantage
+
+def team_total_xp(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, t_ms: int
+) -> int:
+    """Sum of XP across the team at the frame <= t_ms."""
+    pids = participants_on_team(meta, team_id)
+    for f in reversed(timeline.frames):
+        if f.timestamp_ms <= t_ms:
+            return sum(f.participant_frames[pid].xp for pid in pids if pid in f.participant_frames)
+    return 0
+
+
+def xp_diff(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, t_ms: int
+) -> int:
+    """Team XP − enemy XP at frame <= t_ms (positive = team ahead)."""
+    other = 200 if team_id == 100 else 100
+    return team_total_xp(timeline, meta, team_id, t_ms) - team_total_xp(timeline, meta, other, t_ms)
+
+
+def team_avg_level(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, t_ms: int
+) -> float | None:
+    """Mean champion level across the team at frame <= t_ms."""
+    pids = participants_on_team(meta, team_id)
+    for f in reversed(timeline.frames):
+        if f.timestamp_ms <= t_ms:
+            levels = [f.participant_frames[pid].level for pid in pids if pid in f.participant_frames]
+            return sum(levels) / len(levels) if levels else None
+    return None
+
+
+def avg_level_diff(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, t_ms: int
+) -> float | None:
+    """Mean level of team − mean level of enemy at frame <= t_ms."""
+    other = 200 if team_id == 100 else 100
+    own = team_avg_level(timeline, meta, team_id, t_ms)
+    en = team_avg_level(timeline, meta, other, t_ms)
+    if own is None or en is None:
+        return None
+    return own - en
+
+
+def team_total_cs(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, t_ms: int
+) -> int:
+    """Sum of minions + jungle CS across the team at frame <= t_ms."""
+    pids = participants_on_team(meta, team_id)
+    for f in reversed(timeline.frames):
+        if f.timestamp_ms <= t_ms:
+            return sum(
+                f.participant_frames[pid].minions_killed + f.participant_frames[pid].jungle_minions_killed
+                for pid in pids
+                if pid in f.participant_frames
+            )
+    return 0
+
+
+def cs_diff(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, t_ms: int
+) -> int:
+    """Team CS (minions + jungle) − enemy CS at frame <= t_ms."""
+    other = 200 if team_id == 100 else 100
+    return team_total_cs(timeline, meta, team_id, t_ms) - team_total_cs(timeline, meta, other, t_ms)
+
+
+def team_gold_spent(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, t_ms: int
+) -> int:
+    """Gold converted to items (totalGold − currentGold) summed across the team."""
+    return team_total_gold(timeline, meta, team_id, t_ms) - team_current_gold(timeline, meta, team_id, t_ms)
+
+
+def gold_spent_diff(
+    timeline: Timeline, meta: dict[int, ParticipantMeta], team_id: int, t_ms: int
+) -> int:
+    """Team gold spent − enemy gold spent at frame <= t_ms (positive = more items)."""
+    other = 200 if team_id == 100 else 100
+    return team_gold_spent(timeline, meta, team_id, t_ms) - team_gold_spent(timeline, meta, other, t_ms)

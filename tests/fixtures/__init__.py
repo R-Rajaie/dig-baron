@@ -57,18 +57,22 @@ def make_match(match_id: str = "NA1_TEST001", patch: str = "14.1.1") -> dict[str
 def make_participant_frame(
     pid: int,
     total_gold: int = 3000,
+    current_gold: int = 500,
     level: int = 7,
+    xp: int = 5000,
+    minions_killed: int = 50,
+    jungle_minions_killed: int = 20,
     position: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     pos = position or {"x": 0, "y": 0}
     return {
         "participantId": pid,
         "totalGold": total_gold,
-        "currentGold": 500,
+        "currentGold": current_gold,
         "level": level,
-        "xp": 5000,
-        "minionsKilled": 50,
-        "jungleMinionsKilled": 20,
+        "xp": xp,
+        "minionsKilled": minions_killed,
+        "jungleMinionsKilled": jungle_minions_killed,
         "position": pos,
     }
 
@@ -79,22 +83,47 @@ def make_frame(
     events: list[dict[str, Any]] | None = None,
     gold_by_pid: dict[int, int] | None = None,
     level_by_pid: dict[int, int] | None = None,
+    xp_by_pid: dict[int, int] | None = None,
+    cs_by_pid: dict[int, int] | None = None,
+    current_gold_by_pid: dict[int, int] | None = None,
 ) -> dict[str, Any]:
     positions = participant_positions or {}
     golds = gold_by_pid or {}
     levels = level_by_pid or {}
+    xps = xp_by_pid or {}
+    css = cs_by_pid or {}
+    cur_golds = current_gold_by_pid or {}
     pfs: dict[str, Any] = {}
     for pid in range(1, 11):
+        # cs_by_pid sets total CS; split evenly between minions and jungle
+        total_cs = css.get(pid, 70)
         pfs[str(pid)] = make_participant_frame(
             pid=pid,
             total_gold=golds.get(pid, 3000),
+            current_gold=cur_golds.get(pid, 500),
             level=levels.get(pid, 7),
+            xp=xps.get(pid, 5000),
+            minions_killed=total_cs // 2,
+            jungle_minions_killed=total_cs - total_cs // 2,
             position=positions.get(pid),
         )
     return {
         "timestamp": timestamp_ms,
         "participantFrames": pfs,
         "events": events or [],
+    }
+
+
+def ward_placed_event(
+    timestamp_ms: int,
+    creator_id: int,
+    ward_type: str = "YELLOW_TRINKET",
+) -> dict[str, Any]:
+    return {
+        "type": "WARD_PLACED",
+        "timestamp": timestamp_ms,
+        "creatorId": creator_id,
+        "wardType": ward_type,
     }
 
 
