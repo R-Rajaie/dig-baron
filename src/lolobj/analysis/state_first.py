@@ -76,12 +76,20 @@ def make_state_first_frame(df: pd.DataFrame) -> pd.DataFrame:
 
     # ---- State (T-60 or earlier) -----------------------------------------------
 
-    # Gold state bucket
+    # Gold state bucket — % gold lead, quintile-based thresholds
+    # Normalise by estimated team gold at T-60 so early/late objectives are comparable.
     if _need("gold_diff_T_60"):
-        _bins   = [-np.inf, -2500, -750, 750, 2500, np.inf]
         _labels = ["big_behind", "behind", "even", "ahead", "big_ahead"]
+        if "objective_time_ms" in cols:
+            _t_min = ((out["objective_time_ms"] / 1000.0) - 60.0).clip(lower=60.0) / 60.0
+            _est_gold = _t_min * 1300.0 + 500.0
+            out["gold_pct_T_60"] = (out["gold_diff_T_60"] / _est_gold * 100.0).round(1)
+            _gc = "gold_pct_T_60"
+        else:
+            _gc = "gold_diff_T_60"
         out["gold_state_T_60"] = (
-            pd.cut(out["gold_diff_T_60"], bins=_bins, labels=_labels)
+            pd.qcut(out[_gc], q=[0, .2, .4, .6, .8, 1.0],
+                    labels=_labels, duplicates="drop")
             .astype(str)
             .replace("nan", "unknown")
         )
@@ -132,8 +140,10 @@ def make_state_first_frame(df: pd.DataFrame) -> pd.DataFrame:
             default="neutral_prev",
         )
 
-    # Combined readable state bucket (gold | alive | death)
-    _parts = [c for c in ["gold_state_T_60", "alive_state_T_60", "death_state_pre_obj"]
+    # Combined readable state bucket (gold | alive).
+    # death_state_pre_obj is kept as a standalone feature but excluded from the bucket
+    # to avoid sparsity — 5 gold × 3 alive = 15 combinations vs 60 with death state.
+    _parts = [c for c in ["gold_state_T_60", "alive_state_T_60"]
                if c in out.columns]
     if _parts:
         out["state_bucket_T_60"] = out[_parts[0]].str.cat(

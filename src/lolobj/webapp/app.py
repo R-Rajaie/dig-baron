@@ -57,6 +57,11 @@ outcome_df = pd.DataFrame({
 outcome_df = outcome_df[outcome_df["n"] > 0].copy()
 outcome_df["pct"] = (outcome_df["n"] / _N * 100).round(1)
 
+_outcome_sr = df.groupby("outcome_label")["secured"].mean().reset_index()
+_outcome_sr.columns = ["outcome", "secure_rate_val"]
+outcome_combo_df = outcome_df.merge(_outcome_sr, on="outcome", how="left")
+outcome_combo_df["secure_pct"] = (outcome_combo_df["secure_rate_val"] * 100).round(1)
+
 profile_df = (
     df.groupby("setup_profile")["secured"]
     .agg(["mean", "count"])
@@ -66,21 +71,36 @@ profile_df = (
 profile_df["secure_pct"] = (profile_df["secure_rate"] * 100).round(1)
 _pm = {p: i for i, p in enumerate(PROFILE_ORDER)}
 profile_df = profile_df.sort_values("setup_profile", key=lambda s: s.map(_pm).fillna(99))
+profile_df["prop_pct"] = (profile_df["n"] / _N * 100).round(1)
 
 _FEATURE_LABELS = {
-    "arrived_first":      "Arrived first",
+    "arrived_first":      "Arrived first (T-60)",
     "jungler_alive_T_30": "Jungler alive (T-30)",
     "support_alive_T_30": "Support alive (T-30)",
-    "jungler_alive_T_60": "Jungler alive (T-60)",
+    "numbers_adv_T_30":   "Numbers advantage (T-30)",
+    "numbers_down_T_30":  "Numbers down (T-30)",
+    "team_grouped_T_30":  "Team grouped 3+ (T-30)",
 }
 feat_rows = []
 for col, label in _FEATURE_LABELS.items():
-    if col not in df.columns:
+    src = df_sf if col in df_sf.columns else df
+    if col not in src.columns:
         continue
-    r1 = round(df[df[col] == 1]["secured"].mean() * 100, 1)
-    r0 = round(df[df[col] == 0]["secured"].mean() * 100, 1)
+    r1 = round(src[src[col] == 1]["secured"].mean() * 100, 1)
+    r0 = round(src[src[col] == 0]["secured"].mean() * 100, 1)
     feat_rows.append({"feature": label, "present": r1, "absent": r0, "diff": round(r1 - r0, 1)})
-feat_df = pd.DataFrame(feat_rows).sort_values("diff")
+_FEAT_DISPLAY_ORDER = [
+    "Numbers down (T-30)",
+    "Numbers advantage (T-30)",
+    "Team grouped 3+ (T-30)",
+    "Support alive (T-30)",
+    "Jungler alive (T-30)",
+    "Arrived first (T-60)",
+]
+feat_df = pd.DataFrame(feat_rows)
+_ord_map = {v: i for i, v in enumerate(_FEAT_DISPLAY_ORDER)}
+feat_df["_sort"] = feat_df["feature"].map(_ord_map).fillna(99)
+feat_df = feat_df.sort_values("_sort").drop("_sort", axis=1).reset_index(drop=True)
 
 deaths_df = (
     df[df["team_deaths_60s"] <= 4]
@@ -162,75 +182,40 @@ df_sf["sf_swing_pp"] = (df_sf["sf_prob_both"] - df_sf["sf_prob_state"]) * 100
 model_df = pd.DataFrame(model_rows)
 print(f"[app] State+Setup AUC = {model_df[model_df['Model']=='State + Setup']['AUC'].values[0]:.3f}")
 
-# SHAP feature importance for State+Setup model
-print("[app] Computing SHAP importance…")
-import shap as _shap
-_lr_sh, _sc_sh, _X_sh = _saved_models["State + Setup"]
-_X_sh_scaled = _sc_sh.transform(_X_sh.fillna(0).values)
-_shap_exp = _shap.LinearExplainer(_lr_sh, _X_sh_scaled)
-_shap_vals = _shap_exp.shap_values(_X_sh_scaled)
-_shap_mean = np.abs(_shap_vals).mean(axis=0)
-_FEAT_RENAME = {
-    "arrived_first":           "Arrived first (T-60)",
-    "gold_diff_T_60":          "Gold diff (T-60)",
-    "team_alive_T_60":         "Allies alive (T-60)",
-    "enemy_alive_T_60":        "Enemies alive (T-60)",
-    "nearby_diff_T_30":        "Nearby diff (T-30)",
-    "free_setup_T_30":         "Free setup (T-30)",
-    "gave_setup_T_30":         "Gave setup (T-30)",
-    "numbers_adv_T_30":        "Numbers adv (T-30)",
-    "numbers_down_T_30":       "Numbers down (T-30)",
-    "team_grouped_T_30":       "Team grouped 3+ (T-30)",
-    "team_deaths_90s":         "Allied deaths (last 90s)",
-    "enemy_deaths_60s":        "Enemy deaths (last 60s)",
-    "objective_number":        "Objective number",
-    "previous_same_obj_team":  "Team prev obj taken",
-    "previous_same_obj_enemy": "Enemy prev obj taken",
-}
-_STATE_FEATS = set(_SN) | {c for c in _X_sh.columns if any(
-    c.startswith(p) for p in ("objective_type", "rank_bucket", "gold_state", "alive_state", "death_state")
-)}
-_ACTION_FEATS = set(_SA)
-shap_imp_df = (
-    pd.DataFrame({"feature": _X_sh.columns, "importance": _shap_mean})
-    .nlargest(15, "importance")
-    .sort_values("importance")
-    .reset_index(drop=True)
-)
-shap_imp_df["label"] = shap_imp_df["feature"].map(
-    lambda c: _FEAT_RENAME.get(c, c.replace("_", " "))
-)
-shap_imp_df["is_action"] = shap_imp_df["feature"].isin(_ACTION_FEATS)
-print(f"[app] SHAP done — top feature: {shap_imp_df['feature'].iloc[-1]}")
+# SHAP beeswarm — embed the pre-generated notebook output directly
+import base64 as _b64
+_SHAP_PNG = _ROOT / "notebooks" / "output.png"
+_SHAP_IMG_SRC = "data:image/png;base64," + _b64.b64encode(_SHAP_PNG.read_bytes()).decode()
+print("[app] SHAP image loaded from notebooks/output.png")
 
 # ── definitions ──────────────────────────────────────────────────────────────
 
 OUTCOME_DEFS = [
-    ("clean_take",               "good",    "Team secured, no meaningful fight or fight won cleanly."),
-    ("clean_give",               "neutral", "Enemy secured; team chose not to contest. May be intentional."),
-    ("good_trade",               "good",    "Team gave this objective but gained significant resources elsewhere."),
-    ("coinflip",                 "neutral", "Both teams contested; neither had a clear setup advantage beforehand."),
-    ("bad_contest",              "bad",     "Team contested from a weak position (low numbers, deaths) and lost."),
-    ("won_fight_lost_objective", "bad",     "Team won the fight but failed to secure the objective."),
-    ("lost_fight_got_objective", "mixed",   "Team lost the fight but secured the objective anyway (often a steal)."),
-    ("throw_setup",              "bad",     "Team had a winning setup but lost a key member just before the window."),
-    ("objective_steal",          "mixed",   "Team secured from a heavily disadvantaged state via surprise smite or engage."),
+    ("clean_take",               "good",    "Team secured. Won the fight or there was no real fight."),
+    ("clean_give",               "neutral", "Enemy secured. Team did not contest, which may have been intentional."),
+    ("good_trade",               "good",    "Team gave the objective but picked up meaningful value elsewhere."),
+    ("coinflip",                 "neutral", "Both teams showed up with no clear advantage. Outcome was roughly 50/50."),
+    ("bad_contest",              "bad",     "Team contested from a weak spot (short-handed, recent deaths) and lost."),
+    ("won_fight_lost_objective", "bad",     "Team won the fight but still lost the objective."),
+    ("lost_fight_got_objective", "mixed",   "Team lost the fight but secured the objective anyway."),
+    ("throw_setup",              "bad",     "Team was in good shape but lost a player in the last 30s before the fight."),
+    ("objective_steal",          "mixed",   "Team secured from a clearly outnumbered position, usually via smite."),
     ("no_meaningful_contest",    "neutral", "Neither team committed. Objective taken without a real fight."),
 ]
 
 PROFILE_DEFS = [
     ("free_setup",        "good",    "Team present, enemy absent, no recent allied deaths.",
-                                     "Full positional control. Highest expected secure rate."),
+                                     "Full positional control. Secure rate is highest here."),
     ("free_setup_deaths", "mixed",   "Team present, enemy absent, but allied deaths in the prior 60s.",
-                                     "Uncontested positionally but weakened by recent losses."),
-    ("clean_contest",     "neutral", "Both teams near objective, team not at a numbers or health disadvantage.",
-                                     "Even or favorable fight with both sides committed."),
+                                     "Uncontested positionally but down a player or two."),
+    ("clean_contest",     "neutral", "Both teams near objective, team not short-handed or behind on health.",
+                                     "Even or favorable fight with both sides present."),
     ("disadvantaged",     "bad",     "Both teams present, but team had recent deaths or fewer alive champions.",
-                                     "Contesting from behind. High risk of a bad outcome."),
+                                     "Contesting from behind."),
     ("gave_away",         "bad",     "Enemy present at objective, team absent.",
-                                     "Team did not show up to contest. Objective conceded."),
-    ("both_absent",       "neutral", "Neither team present near objective at T-30.",
-                                     "Neither side committed. Objective taken without setup by one side."),
+                                     "Team did not show up."),
+    ("both_absent",       "neutral", "Neither team near objective at T-30.",
+                                     "Neither side committed. One team eventually took it."),
 ]
 
 # ── Riot API helpers ─────────────────────────────────────────────────────────
@@ -329,6 +314,70 @@ def fig_profile_secure() -> go.Figure:
     )
 
 
+def fig_profile_combo() -> go.Figure:
+    p = profile_df.copy()
+    _cs = [[0, _BAD], [0.5, _MIXED], [1, _GOOD]]
+    fig = go.Figure(go.Treemap(
+        labels=p["setup_profile"].str.replace("_", " "),
+        parents=[""] * len(p),
+        values=p["prop_pct"],
+        customdata=np.column_stack([p["secure_pct"], p["n"]]),
+        marker=dict(
+            colors=p["secure_pct"],
+            colorscale=_cs,
+            cmin=0, cmax=100,
+            colorbar=dict(
+                title=dict(text="Secure %", font=dict(size=11)),
+                tickvals=[0, 50, 100],
+                thickness=12, len=0.6, x=1.02,
+            ),
+            line=dict(width=2, color="white"),
+        ),
+        texttemplate="<b>%{label}</b><br>%{value:.1f}% of rows<br>%{customdata[0]:.1f}% secure",
+        hovertemplate="<b>%{label}</b><br>Proportion: %{value:.1f}%<br>Secure rate: %{customdata[0]:.1f}%<br>n=%{customdata[1]:,}<extra></extra>",
+        textfont=dict(family=_FONT, size=12),
+    ))
+    return _fig(fig,
+        title=dict(text="Setup profile: prevalence (size) vs secure rate (color)", font=dict(size=14, color="#1e293b")),
+        height=380,
+        margin=dict(l=4, r=60, t=44, b=8),
+    )
+
+
+def fig_outcome_combo() -> go.Figure:
+    oc = outcome_combo_df.copy()
+    _sentiment = {"good": 100, "mixed": 60, "neutral": 45, "bad": 5}
+    _tag_map    = {name: _sentiment[tag] for name, tag, _ in OUTCOME_DEFS}
+    oc["score"] = oc["outcome"].map(_tag_map).fillna(45)
+    _cs = [[0, _BAD], [0.5, _MIXED], [1, _GOOD]]
+    fig = go.Figure(go.Treemap(
+        labels=oc["outcome"].str.replace("_", " "),
+        parents=[""] * len(oc),
+        values=oc["pct"],
+        customdata=np.column_stack([oc["score"], oc["n"]]),
+        marker=dict(
+            colors=oc["score"],
+            colorscale=_cs,
+            cmin=0, cmax=100,
+            colorbar=dict(
+                title=dict(text="Outcome quality", font=dict(size=11)),
+                tickvals=[5, 45, 100],
+                ticktext=["bad", "neutral", "good"],
+                thickness=12, len=0.6, x=1.02,
+            ),
+            line=dict(width=2, color="white"),
+        ),
+        texttemplate="<b>%{label}</b><br>%{value:.1f}% of rows",
+        hovertemplate="<b>%{label}</b><br>Proportion: %{value:.1f}%<br>n=%{customdata[1]:,}<extra></extra>",
+        textfont=dict(family=_FONT, size=12),
+    ))
+    return _fig(fig,
+        title=dict(text="Outcome label: prevalence (size) vs outcome quality (color)", font=dict(size=14, color="#1e293b")),
+        height=380,
+        margin=dict(l=4, r=60, t=44, b=8),
+    )
+
+
 def fig_feature_impact() -> go.Figure:
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -419,21 +468,6 @@ def fig_model_auc() -> go.Figure:
     )
 
 
-def fig_shap_importance() -> go.Figure:
-    colors = [_ACCENT if a else _NEUT for a in shap_imp_df["is_action"]]
-    fig = go.Figure(go.Bar(
-        x=shap_imp_df["importance"], y=shap_imp_df["label"], orientation="h",
-        marker=dict(color=colors, line=dict(width=0)),
-        text=shap_imp_df["importance"].apply(lambda x: f"{x:.4f}"),
-        textposition="outside", textfont=dict(size=10, color="#475569"),
-        hovertemplate="<b>%{y}</b><br>Mean |SHAP|: %{x:.4f}<extra></extra>",
-    ))
-    return _fig(fig,
-        title=dict(text="Feature importance (mean |SHAP|): State + Setup model", font=dict(size=14, color="#1e293b")),
-        height=max(360, len(shap_imp_df) * 28 + 80),
-        xaxis=dict(showgrid=True, gridcolor="#f1f5f9", title="mean |SHAP value|"),
-        margin=dict(l=4, r=80, t=44, b=8),
-    )
 
 
 def fig_rank_outcomes() -> go.Figure:
@@ -601,16 +635,14 @@ def page_home() -> html.Div:
         html.Div(className="hero", children=[
             html.H1("League Objective Setup Analytics", className="hero-title"),
             html.P(
-                "A framework for understanding what separates good and bad objective setups "
-                "in League of Legends, and how that varies by rank, objective type, and game state.",
+                "What separates good and bad objective setups in League of Legends, "
+                "and how that varies by rank, objective type, and game state.",
                 className="hero-sub",
             ),
         ]),
         html.Div(className="stat-row", children=[
             stat_card("Matches analyzed", f"{STATS['matches']:,}"),
             stat_card("Objective instances", f"{STATS['objectives']:,}"),
-            stat_card("Objective types", str(STATS["obj_types"])),
-            stat_card("Overall secure rate", f"{STATS['secure_rate']}%"),
         ]),
         section("Core research question", "",
             html.P(
@@ -618,10 +650,6 @@ def page_home() -> html.Div:
                 "The project focuses on Dragon and Baron first, then extends to Herald, Voidgrubs, Soul, and Elder.",
                 className="body-text",
             ),
-        ),
-        section("Objective outcomes",
-                "Each row is classified into one of ten outcome categories, going beyond just secured or not secured.",
-            graph(fig_outcomes()),
         ),
         section("What this project does", "",
             html.Ul(className="bullet-list", children=[
@@ -678,7 +706,7 @@ def page_methods() -> html.Div:
         ),
 
         section("State-first analytical framework",
-                "The core idea: separate what was already true at T-60 from what teams chose to do between T-60 and T-30.",
+                "Separate what was already true at T-60 from what teams chose to do between T-60 and T-30.",
             html.Div(className="three-col", children=[
                 html.Div(className="method-card", children=[
                     html.Div("01", className="method-num"),
@@ -703,9 +731,54 @@ def page_methods() -> html.Div:
                            className="method-body"),
                 ]),
             ]),
-            note("Looking at setup actions within similar T-60 states gives a cleaner comparison than "
-                 "looking across all games at once. It holds the starting situation roughly constant. "
-                 "Everything here is still observational, not causal."),
+            note("Comparing within similar T-60 states is cleaner than looking across all games at once "
+                 "because the starting situation is roughly controlled for. Still observational, not causal."),
+        ),
+
+        section("State bucket definitions",
+                "The T-60 state is broken into three dimensions that get combined into one bucket label.",
+            html.Div(className="three-col", children=[
+                html.Div(className="method-card", children=[
+                    html.Div("Gold state (T-60)", className="method-title"),
+                    html.P("Gold lead as % of estimated team gold at game time, split into quintiles from the data.",
+                           className="method-body"),
+                    html.Ul(className="bullet-list", children=[
+                        html.Li(html.Span([html.B("big_behind"), ": bottom 20%"])),
+                        html.Li(html.Span([html.B("behind"), ": 20th-40th percentile"])),
+                        html.Li(html.Span([html.B("even"), ": middle 20% (40th-60th)"])),
+                        html.Li(html.Span([html.B("ahead"), ": 60th-80th percentile"])),
+                        html.Li(html.Span([html.B("big_ahead"), ": top 20%"])),
+                    ]),
+                    html.P("Normalizing by estimated team gold keeps thresholds comparable across "
+                           "Dragon 1 (~5 min) and Dragon 2 (~12 min).", className="method-body"),
+                ]),
+                html.Div(className="method-card", children=[
+                    html.Div("Alive state (T-60)", className="method-title"),
+                    html.Ul(className="bullet-list", children=[
+                        html.Li(html.Span([html.B("numbers_down"), ": fewer alive than enemy"])),
+                        html.Li(html.Span([html.B("even_alive"), ": equal alive counts"])),
+                        html.Li(html.Span([html.B("numbers_up"), ": more alive than enemy"])),
+                    ]),
+                ]),
+                html.Div(className="method-card", children=[
+                    html.Div("Death state (standalone feature)", className="method-title"),
+                    html.P("Kept as a standalone feature but not part of the state bucket. "
+                           "It overlaps heavily with alive_state, and adding it would create 60 bucket combinations instead of 15.",
+                           className="method-body"),
+                    html.Ul(className="bullet-list", children=[
+                        html.Li(html.Span([html.B("no_recent_deaths"), ": neither side lost a champion in the last 90s"])),
+                        html.Li(html.Span([html.B("enemy_pick"), ": enemy had deaths, team did not"])),
+                        html.Li(html.Span([html.B("team_pick"), ": team had deaths, enemy did not"])),
+                        html.Li(html.Span([html.B("trade_deaths"), ": both sides had deaths"])),
+                    ]),
+                ]),
+            ]),
+            html.P(
+                "The combined bucket reads as gold_state | alive_state, e.g. 'even | numbers_up'. "
+                "That gives 15 combinations. Adding death state would push it to 60, "
+                "which leaves too few rows per bucket to compare meaningfully.",
+                className="body-text",
+            ),
         ),
 
         section("Setup profile definitions",
@@ -771,11 +844,23 @@ def page_analysis() -> html.Div:
     return html.Div(className="page", children=[
         html.H1("Analysis & Results", className="page-title"),
 
-        section("Setup profiles and secure rates",
-                "Profiles classify each team's position at T-30 based on who showed up and whether there were recent deaths.",
-            graph(fig_profile_secure()),
-            note("'Free setup' and 'gave away' sit at opposite ends of the secure rate distribution, "
-                 "which is what you'd expect. See Methods for full profile definitions."),
+        section("Setup profiles: frequency and secure rate",
+                "Each bar shows how common a profile is; the line shows how often that profile led to securing the objective.",
+            graph(fig_profile_combo()),
+            note("'Free setup' and 'gave away' sit at opposite ends of the secure rate distribution. "
+                 "See Methods for full profile definitions."),
+        ),
+
+        section("Outcome labels: prevalence and strategic quality",
+                "Tile size = how often each outcome occurred. Color = strategic quality of the outcome.",
+            graph(fig_outcome_combo()),
+            note(
+                "lost_fight_got_objective is more common than won_fight_lost_objective because if you win the fight "
+                "you almost always have time to take the objective too. 'Won fight, lost objective' mostly happens "
+                "when the enemy gets a last-second smite steal. "
+                "A team losing the fight will often still try a last-second smite, because there is nothing else to do. "
+                "objective_steal is rarer since it requires being behind and winning the smite."
+            ),
         ),
 
         section("Impact of key binary features",
@@ -833,15 +918,16 @@ def page_analysis() -> html.Div:
         ),
 
         section("Feature importance (SHAP)",
-                "Mean absolute SHAP value per feature in the State + Setup model. "
-                "Blue bars are setup actions (T-30); gray bars are state features (T-60 or earlier).",
-            graph(fig_shap_importance()),
+                "Random Forest model. Each dot is one objective row. "
+                "Color shows feature value: blue = low, red = high.",
+            html.Img(src=_SHAP_IMG_SRC,
+                     style={"width": "100%", "maxWidth": "860px", "display": "block",
+                            "border": "1px solid #e2e8f0", "borderRadius": "8px"}),
             note(
                 "SHAP values show how much each feature shifts the model's prediction on average. "
-                "State features (gray) reflect the situation before teams commit. "
-                "Action features (blue) reflect what teams actually did. "
-                "High SHAP for an action feature means that behavior consistently moved outcomes, "
-                "even after holding the starting state roughly constant."
+                "Gray dots are state features (T-60 or earlier). Blue dots are setup actions (T-30). "
+                "Color shows the feature value: blue = low, red = high. "
+                "A wide spread means the feature matters a lot depending on its value."
             ),
         ),
 
@@ -897,7 +983,7 @@ def page_conclusion() -> html.Div:
                 html.Div(className="finding", children=[
                     html.Div("01", className="finding-num"),
                     html.Div(className="finding-body", children=[
-                        html.H3("Setup actions add predictive value beyond pre-objective state",
+                        html.H3("Setup choices matter beyond what the pre-objective state alone predicts",
                                 className="finding-title"),
                         html.P(
                             f"The combined model hits AUC {_best:.3f} vs {_state:.3f} for the "
@@ -910,7 +996,7 @@ def page_conclusion() -> html.Div:
                 html.Div(className="finding", children=[
                     html.Div("02", className="finding-num"),
                     html.Div(className="finding-body", children=[
-                        html.H3("Arrival timing is the strongest single setup signal",
+                        html.H3("Arriving first is the clearest setup advantage in the data",
                                 className="finding-title"),
                         html.P(
                             "Within similar T-60 state buckets, arriving first is associated with "
@@ -923,12 +1009,12 @@ def page_conclusion() -> html.Div:
                 html.Div(className="finding", children=[
                     html.Div("03", className="finding-num"),
                     html.Div(className="finding-body", children=[
-                        html.H3("Deaths before objective are highly damaging",
+                        html.H3("Dying before the objective is one of the clearest ways to lose it",
                                 className="finding-title"),
                         html.P(
                             "A single allied death in the 60s before the objective drops the secure "
-                            "rate by ~20 pp. Two deaths brings it below 25%. Throw-setup patterns "
-                            "appear to be a primary driver of objective losses.",
+                            "rate by ~20 pp. Two deaths brings it below 25%. Dying right before the "
+                            "fight is one of the most common ways objectives are thrown.",
                             className="finding-text",
                         ),
                     ]),
@@ -936,12 +1022,12 @@ def page_conclusion() -> html.Div:
                 html.Div(className="finding", children=[
                     html.Div("04", className="finding-num"),
                     html.Div(className="finding-body", children=[
-                        html.H3("Free setup strongly predicts securing; giving setup strongly predicts losing",
+                        html.H3("Showing up uncontested almost always wins. Not showing up almost always loses.",
                                 className="finding-title"),
                         html.P(
-                            "Teams that show up with no enemy around secure at very high rates. "
+                            "Teams that arrive with no enemy around secure at very high rates. "
                             "Teams that skip the objective entirely lose it almost every time. "
-                            "T-30 presence is the strongest single signal in the data.",
+                            "T-30 presence is the clearest single signal in the data.",
                             className="finding-text",
                         ),
                     ]),
@@ -971,11 +1057,10 @@ def page_conclusion() -> html.Div:
 
         section("Methodological note", "",
             html.P(
-                "State-first analysis should be read as: among teams in similar pre-objective "
-                "situations, these setup choices were associated with better or worse secure rates. "
-                "This is a cleaner comparison than raw correlation because it holds the starting "
-                "situation roughly constant, but it is still observational. It cannot prove that "
-                "a team would have secured the objective by making a different choice.",
+                "State-first results should be read as: among teams in similar pre-objective situations, "
+                "these setup choices were associated with better or worse secure rates. "
+                "The starting situation is roughly controlled for, which makes it cleaner than raw correlation, "
+                "but it is still observational. It does not prove a team would have secured by doing something different.",
                 className="body-text note",
             ),
         ),
