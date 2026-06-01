@@ -55,11 +55,17 @@ def save_timeline(match_id: str, payload: dict[str, Any], root: Path | None = No
 
 
 def load_match(match_id: str, root: Path | None = None) -> dict[str, Any]:
-    return json.loads(_match_path(match_id, root).read_text(encoding="utf-8"))
+    try:
+        return json.loads(_match_path(match_id, root).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Corrupt match JSON for {match_id}") from exc
 
 
 def load_timeline(match_id: str, root: Path | None = None) -> dict[str, Any]:
-    return json.loads(_timeline_path(match_id, root).read_text(encoding="utf-8"))
+    try:
+        return json.loads(_timeline_path(match_id, root).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Corrupt timeline JSON for {match_id}") from exc
 
 
 _PUUID_BUCKETS_FILE = "puuid_buckets.json"

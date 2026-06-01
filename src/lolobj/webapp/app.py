@@ -22,6 +22,7 @@ if str(_SRC) not in sys.path:
 from dash import Dash, Input, Output, State, callback, dcc, html
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 
@@ -33,6 +34,9 @@ from lolobj.riot_client import RiotClient, PLATFORM_TO_REGION
 # ── data ────────────────────────────────────────────────────────────────────
 print("[app] Loading data…")
 df = pd.read_parquet(PROCESSED_DIR / "objective_windows.parquet")
+# Voidgrubs: ordinals 4-6 are a second camp introduced in some patches.
+# Only one camp of 3 grubs is meaningful for this analysis.
+df = df[~((df["objective_type"] == "HORDE") & (df["objective_number"] > 3))].copy()
 df["setup_profile"] = assign_setup_profiles(df)
 df_sf = make_state_first_frame(df)
 _N = len(df)
@@ -214,7 +218,7 @@ PROFILE_DEFS = [
                                      "Contesting from behind."),
     ("gave_away",         "bad",     "Enemy present at objective, team absent.",
                                      "Team did not show up."),
-    ("both_absent",       "neutral", "Neither team near objective at T-30.",
+    ("no_early_setup",    "neutral", "Neither team near objective at T-30.",
                                      "Neither side committed. One team eventually took it."),
 ]
 
@@ -253,11 +257,25 @@ _NEUT   = "#94a3b8"
 _FONT   = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
 
 _OUTCOME_COLORS = {
-    "clean_take": _GOOD, "clean_give": _GOOD, "good_trade": _GOOD,
-    "coinflip": _NEUT,
-    "bad_contest": _BAD, "won_fight_lost_objective": _BAD, "throw_setup": _BAD,
-    "lost_fight_got_objective": _MIXED, "objective_steal": _MIXED,
-    "no_meaningful_contest": _NEUT,
+    "clean_take":               "#10b981",  # emerald
+    "clean_give":               "#06b6d4",  # cyan
+    "good_trade":               "#84cc16",  # lime
+    "coinflip":                 "#a78bfa",  # violet
+    "bad_contest":              "#ef4444",  # red
+    "won_fight_lost_objective": "#f97316",  # orange
+    "throw_setup":              "#e11d48",  # rose
+    "lost_fight_got_objective": "#f59e0b",  # amber
+    "objective_steal":          "#7c3aed",  # purple
+    "no_meaningful_contest":    "#64748b",  # slate
+}
+
+_PROFILE_COLORS = {
+    "free_setup":        "#059669",
+    "free_setup_deaths": "#34d399",
+    "clean_contest":     "#3d5af1",
+    "disadvantaged":     "#ef4444",
+    "gave_away":         "#94a3b8",
+    "no_early_setup":    "#cbd5e1",
 }
 
 _BASE = dict(
@@ -275,7 +293,145 @@ def _fig(fig: go.Figure, **layout) -> go.Figure:
     return fig
 
 
+# ── pre-compute gold breakeven curves ────────────────────────────────────────
+# One logistic regression per setup profile: P(secure) ~ gold_pct_T_60.
+# gold_pct_T_60 = gold_diff / estimated_team_gold * 100 (computed in state_first).
+# Breakeven = gold_pct where logit = 0  →  -intercept / coef.
+_df_drag = df_sf[df_sf["objective_type"] == "DRAGON"].copy()
+_g_lo = float(_df_drag["gold_pct_T_60"].quantile(0.02))
+_g_hi = float(_df_drag["gold_pct_T_60"].quantile(0.98))
+_gold_range = np.linspace(_g_lo, _g_hi, 400)
+
+_BREAKEVEN_DATA: list[tuple] = []
+for _prof in PROFILE_ORDER:
+    _sub = _df_drag[_df_drag["setup_profile"] == _prof].dropna(
+        subset=["gold_pct_T_60", "secured"]
+    )
+    if len(_sub) < 30:
+        continue
+    _lr_be = LogisticRegression(max_iter=1000)
+    _lr_be.fit(_sub[["gold_pct_T_60"]].values, _sub["secured"].values.astype(int))
+    _coef = float(_lr_be.coef_[0][0])
+    _be   = (-float(_lr_be.intercept_[0]) / _coef) if _coef != 0 else None
+    _y_pred = _lr_be.predict_proba(_gold_range.reshape(-1, 1))[:, 1]
+    _BREAKEVEN_DATA.append((
+        _prof,
+        _PROFILE_COLORS.get(_prof, "#888"),
+        _gold_range.copy(),
+        _y_pred,
+        _be,
+        len(_sub),
+    ))
+
+# ── pre-compute setup → outcome Sankey edge counts ────────────────────────────
+_sankey_counts = (
+    df.groupby(["setup_profile", "outcome_label"])
+    .size()
+    .reset_index(name="n")
+)
+_sankey_counts = _sankey_counts[_sankey_counts["n"] >= 3].copy()
+
+# ── per-objective pie data ─────────────────────────────────────────────────────
+# Voidgrubs: use ordinal 1 (first grub) as representative for camp 1,
+# ordinal 4 for camp 2 — avoids triple-counting the three kills per camp.
+_is_elder   = df["monster_subtype"] == "ELDER_DRAGON"
+_is_reg_drag = (df["objective_type"] == "DRAGON") & ~_is_elder
+
+_OBJ_SLICES: list[tuple[str, pd.Series]] = [
+    ("Dragon 1",     _is_reg_drag & (df["objective_number"] == 1)),
+    ("Dragon 2",     _is_reg_drag & (df["objective_number"] == 2)),
+    ("Dragon 3",     _is_reg_drag & (df["objective_number"] == 3)),
+    ("Dragon 4",     _is_reg_drag & (df["objective_number"] == 4)),
+    ("Dragon 5",     _is_reg_drag & (df["objective_number"] == 5)),
+    ("Dragon 6",     _is_reg_drag & (df["objective_number"] == 6)),
+    ("Dragon 7",     _is_reg_drag & (df["objective_number"] == 7)),
+    ("Elder Dragon", _is_elder    & (df["objective_number"] == 1)),
+    ("Baron 1",      (df["objective_type"] == "BARON_NASHOR") & (df["objective_number"] == 1)),
+    ("Baron 2",      (df["objective_type"] == "BARON_NASHOR") & (df["objective_number"] == 2)),
+    ("Herald",       (df["objective_type"] == "RIFTHERALD")   & (df["objective_number"] == 1)),
+    ("Voidgrubs",    (df["objective_type"] == "HORDE")        & (df["objective_number"] == 1)),
+]
+_PIE_NCOLS = 6
+
+
 # ── figures ───────────────────────────────────────────────────────────────────
+
+def _make_pie_grid(
+    value_fn,       # callable(sub_df) → (names, values, colors)
+    title: str,
+    legend_labels: list[str],
+    legend_colors: list[str],
+) -> go.Figure:
+    nrows = math.ceil(len(_OBJ_SLICES) / _PIE_NCOLS)
+    specs = [[{"type": "pie"}] * _PIE_NCOLS for _ in range(nrows)]
+    titles = [lbl for lbl, _ in _OBJ_SLICES] + [""] * (nrows * _PIE_NCOLS - len(_OBJ_SLICES))
+    fig = make_subplots(rows=nrows, cols=_PIE_NCOLS, specs=specs, subplot_titles=titles)
+
+    for i, (lbl, mask) in enumerate(_OBJ_SLICES):
+        row, col = i // _PIE_NCOLS + 1, i % _PIE_NCOLS + 1
+        sub = df[mask]
+        names, values, colors = value_fn(sub)
+        fig.add_trace(go.Pie(
+            labels=names,
+            values=values,
+            marker=dict(colors=colors, line=dict(color="white", width=1)),
+            hovertemplate="%{label}<br>%{percent}<br>n=%{value:,}<extra></extra>",
+            textinfo="percent",
+            textfont=dict(size=9, family=_FONT),
+            showlegend=False,
+        ), row=row, col=col)
+
+    # Dummy invisible scatter traces to build a clean shared legend
+    for leg_label, leg_color in zip(legend_labels, legend_colors):
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers",
+            marker=dict(size=10, color=leg_color, symbol="square"),
+            name=leg_label, showlegend=True,
+        ))
+
+    fig.update_layout(
+        **{k: v for k, v in _BASE.items() if k != "margin"},
+        title=dict(text=title, font=dict(size=14, color="#1e293b")),
+        height=160 * nrows + 80,
+        margin=dict(l=4, r=160, t=60, b=8),
+        legend=dict(
+            orientation="v", x=1.01, xanchor="left", y=0.5, yanchor="middle",
+            font=dict(size=11, family=_FONT),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+    )
+    return fig
+
+
+def fig_objective_profile_pies() -> go.Figure:
+    ordered = [p for p in PROFILE_ORDER if p in df["setup_profile"].unique()]
+
+    def _values(sub: pd.DataFrame):
+        vc = sub["setup_profile"].value_counts()
+        names  = [p.replace("_", " ") for p in ordered if p in vc.index]
+        values = [int(vc[p]) for p in ordered if p in vc.index]
+        colors = [_PROFILE_COLORS.get(p, "#888") for p in ordered if p in vc.index]
+        return names, values, colors
+
+    leg_labels = [p.replace("_", " ") for p in ordered]
+    leg_colors = [_PROFILE_COLORS.get(p, "#888") for p in ordered]
+    return _make_pie_grid(_values, "Setup profile distribution by objective", leg_labels, leg_colors)
+
+
+def fig_objective_outcome_pies() -> go.Figure:
+    ordered = [o for o in OUTCOME_ORDER if o in df["outcome_label"].unique()]
+
+    def _values(sub: pd.DataFrame):
+        vc = sub["outcome_label"].value_counts()
+        names  = [o.replace("_", " ") for o in ordered if o in vc.index]
+        values = [int(vc[o]) for o in ordered if o in vc.index]
+        colors = [_OUTCOME_COLORS.get(o, _NEUT) for o in ordered if o in vc.index]
+        return names, values, colors
+
+    leg_labels = [o.replace("_", " ") for o in ordered]
+    leg_colors = [_OUTCOME_COLORS.get(o, _NEUT) for o in ordered]
+    return _make_pie_grid(_values, "Outcome label distribution by objective", leg_labels, leg_colors)
+
 
 def fig_outcomes() -> go.Figure:
     colors = [_OUTCOME_COLORS.get(o, _NEUT) for o in outcome_df["outcome"]]
@@ -489,6 +645,119 @@ def fig_rank_outcomes() -> go.Figure:
     )
 
 
+def fig_gold_breakeven() -> go.Figure:
+    """Sigmoid curves: P(secure) vs gold_pct_T_60, one line per setup profile."""
+    fig = go.Figure()
+    for prof, color, gold_range, y_pred, breakeven, n in _BREAKEVEN_DATA:
+        label = prof.replace("_", " ")
+        fig.add_trace(go.Scatter(
+            x=gold_range, y=y_pred,
+            name=label,
+            mode="lines",
+            line=dict(color=color, width=2.5),
+            hovertemplate=(
+                f"<b>{label}</b><br>"
+                "Gold %: %{x:+.1f}%<br>"
+                "P(secure): %{y:.1%}<extra></extra>"
+            ),
+        ))
+        if breakeven is not None:
+            fig.add_trace(go.Scatter(
+                x=[breakeven], y=[0.5],
+                mode="markers+text",
+                marker=dict(color=color, size=11, symbol="diamond",
+                            line=dict(color="white", width=1.5)),
+                text=[f"{breakeven:+.1f}%"],
+                textposition="top center",
+                textfont=dict(size=9, color=color, family=_FONT),
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>{label}</b> breakeven<br>"
+                    f"Gold %: {breakeven:+.1f}%<extra></extra>"
+                ),
+            ))
+    fig.add_hline(
+        y=0.5, line_dash="dash", line_color="#94a3b8", line_width=1.2,
+        annotation_text="50%", annotation_position="right",
+        annotation_font=dict(size=11, color="#64748b", family=_FONT),
+    )
+    fig.add_vline(x=0, line_dash="dot", line_color="#e2e8f0", line_width=1)
+    return _fig(fig,
+        title=dict(text="Gold % advantage vs. secure rate by setup profile",
+                   font=dict(size=14, color="#1e293b")),
+        height=430,
+        xaxis=dict(
+            showgrid=True, gridcolor="#f1f5f9", zeroline=False,
+            title="Gold % advantage at T-60 (team − enemy, % of est. team gold)",
+            ticksuffix="%",
+        ),
+        yaxis=dict(
+            showgrid=True, gridcolor="#f1f5f9", zeroline=False,
+            title="P(secure objective)",
+            tickformat=".0%",
+            range=[0, 1],
+        ),
+        showlegend=True,
+        legend=dict(
+            orientation="h", y=-0.18, x=0.5, xanchor="center",
+            font=dict(size=12), bgcolor="rgba(0,0,0,0)",
+        ),
+        margin=dict(l=4, r=60, t=44, b=80),
+    )
+
+
+def fig_setup_outcome_sankey() -> go.Figure:
+    """Sankey: setup profile → outcome label."""
+    p_setups   = [p for p in PROFILE_ORDER if p in _sankey_counts["setup_profile"].unique()]
+    p_outcomes = [o for o in OUTCOME_ORDER  if o in _sankey_counts["outcome_label"].unique()]
+    all_labels = p_setups + p_outcomes
+    node_idx   = {l: i for i, l in enumerate(all_labels)}
+
+    def _rgba(hex_c: str, a: float = 0.28) -> str:
+        h = hex_c.lstrip("#")
+        return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{a})"
+
+    node_colors = (
+        [_rgba(_PROFILE_COLORS.get(p, _NEUT), 1.0) for p in p_setups]
+        + [_rgba(_OUTCOME_COLORS.get(o, _NEUT), 1.0) for o in p_outcomes]
+    )
+    src, tgt, val, lc = [], [], [], []
+    for _, row in _sankey_counts.iterrows():
+        sp, ol, n = row["setup_profile"], row["outcome_label"], int(row["n"])
+        if sp in node_idx and ol in node_idx:
+            src.append(node_idx[sp])
+            tgt.append(node_idx[ol])
+            val.append(n)
+            lc.append(_rgba(_PROFILE_COLORS.get(sp, _NEUT)))
+
+    fig = go.Figure(go.Sankey(
+        arrangement="snap",
+        node=dict(
+            pad=14, thickness=30,
+            label=[l.replace("_", " ") for l in all_labels],
+            color=node_colors,
+            line=dict(color="rgba(0,0,0,0)", width=0),
+            hovertemplate="%{label}<br>Total: %{value:,}<extra></extra>",
+        ),
+        link=dict(
+            source=src, target=tgt, value=val, color=lc,
+            hovertemplate="%{source.label} → %{target.label}<br>Count: %{value:,}<extra></extra>",
+        ),
+    ))
+    fig.update_layout(
+        paper_bgcolor="white",
+        font=dict(family=_FONT, size=11, color="#1e293b"),
+        title=dict(
+            text="Setup profile → outcome label",
+            font=dict(size=14, color="#1e293b"),
+        ),
+        height=500,
+        margin=dict(l=10, r=10, t=44, b=10),
+        hoverlabel=dict(bgcolor="white", font_size=13, font_family=_FONT),
+    )
+    return fig
+
+
 # ── game analysis builder ────────────────────────────────────────────────────
 
 def _swing_badge(sw: float) -> html.Span:
@@ -613,20 +882,6 @@ def graph(fig: go.Figure) -> dcc.Graph:
     return dcc.Graph(figure=fig, config={"displayModeBar": False}, className="chart")
 
 
-# ── tab styles ────────────────────────────────────────────────────────────────
-
-_TAB = {
-    "padding": "0 2px", "height": "52px", "lineHeight": "52px",
-    "border": "none", "borderTop": "none", "borderLeft": "none",
-    "borderRight": "none", "borderBottom": "2px solid transparent",
-    "borderRadius": "0", "background": "transparent",
-    "color": "#64748b", "fontSize": "14px", "fontWeight": "400",
-    "fontFamily": _FONT, "marginRight": "28px",
-}
-_TAB_ACTIVE = {
-    **_TAB,
-    "color": "#1e293b", "borderBottom": "2px solid #3d5af1", "fontWeight": "500",
-}
 
 # ── page: Home ────────────────────────────────────────────────────────────────
 
@@ -863,6 +1118,28 @@ def page_analysis() -> html.Div:
             ),
         ),
 
+        section("Gold disadvantage and advantage needed to reach 50% secure rate",
+                "Logistic regression curves fitted per setup profile on gold difference at T-60. "
+                "Diamonds mark the breakeven gold difference where the predicted secure rate hits 50%.",
+            graph(fig_gold_breakeven()),
+            note(
+                "Free setup teams need to be nearly 10,000 gold behind before their secure rate drops to 50%. "
+                "Teams that gave away the objective need a 7,000 gold lead just to reach 50%. "
+                "Disadvantaged contest is already below 50% at even gold — a moderate gold lead does not compensate for bad setup."
+            ),
+        ),
+
+        section("How setup profiles lead to outcomes",
+                "Flow from pre-objective setup (left) to objective outcome (right). "
+                "Width is proportional to the number of objective instances.",
+            graph(fig_setup_outcome_sankey()),
+            note(
+                "Gave away maps almost entirely to clean give or good trade. "
+                "Disadvantaged flows into throw setup and coinflip more than any other profile. "
+                "Both absent maps cleanly to no meaningful contest."
+            ),
+        ),
+
         section("Impact of key binary features",
                 "Secure rate with and without each binary feature.",
             graph(fig_feature_impact()),
@@ -1080,30 +1357,21 @@ app.layout = html.Div(className="app-root", children=[
     html.Header(className="site-header", children=[
         html.Div(className="header-inner", children=[
             html.Span("League Objective Analytics", className="site-logo"),
-            dcc.Tabs(
-                id="tabs", value="home", className="nav-tabs",
-                children=[
-                    dcc.Tab(label="Home",       value="home",       className="nav-tab", selected_className="nav-tab--on", style=_TAB, selected_style=_TAB_ACTIVE),
-                    dcc.Tab(label="Methods",    value="methods",    className="nav-tab", selected_className="nav-tab--on", style=_TAB, selected_style=_TAB_ACTIVE),
-                    dcc.Tab(label="Analysis",   value="analysis",   className="nav-tab", selected_className="nav-tab--on", style=_TAB, selected_style=_TAB_ACTIVE),
-                    dcc.Tab(label="Conclusion", value="conclusion", className="nav-tab", selected_className="nav-tab--on", style=_TAB, selected_style=_TAB_ACTIVE),
-                ],
-            ),
+            html.Nav(className="nav-links", children=[
+                html.A("Home",     href="#home",     className="nav-link"),
+                html.A("Methods",  href="#methods",  className="nav-link"),
+                html.A("Analysis", href="#analysis", className="nav-link"),
+            ]),
         ]),
     ]),
-    html.Div(id="content", className="content-root"),
+    html.Div(className="content-root", children=[
+        html.Div(id="home",     children=page_home()),
+        html.Hr(className="page-divider"),
+        html.Div(id="methods",  children=page_methods()),
+        html.Hr(className="page-divider"),
+        html.Div(id="analysis", children=page_analysis()),
+    ]),
 ])
-
-
-@callback(Output("content", "children"), Input("tabs", "value"))
-def render(tab: str) -> html.Div:
-    if tab == "home":
-        return page_home()
-    if tab == "methods":
-        return page_methods()
-    if tab == "analysis":
-        return page_analysis()
-    return page_conclusion()
 
 
 @callback(

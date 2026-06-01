@@ -798,3 +798,22 @@ body {
   .lookup-form { flex-direction: column; align-items: stretch; }
   .lookup-input, .lookup-btn { width: 100%; }
 }
+
+/* ── single-page nav links ─────────────────────────────────────── */
+.nav-links { flex: 1; display: flex; align-items: center; }
+.nav-link {
+  height: 52px; line-height: 52px;
+  padding: 0 2px; margin-right: 28px;
+  border-bottom: 2px solid transparent;
+  color: #64748b; font-size: 14px; font-weight: 400;
+  font-family: var(--font); text-decoration: none;
+  transition: color 0.15s, border-color 0.15s;
+}
+.nav-link:hover { color: #1e293b; }
+
+/* ── page divider between sections ────────────────────────────── */
+.page-divider {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 0;
+}

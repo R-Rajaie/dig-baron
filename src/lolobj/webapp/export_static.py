@@ -217,6 +217,28 @@ def page_analysis() -> str:
                   "mostly happens when the enemy gets a last-second smite steal. A team losing the fight will "
                   "often still try a last-second smite, because there is nothing else to do. "
                   "objective_steal is rarer since it requires being behind and winning the smite."))
+        + _section("Setup profile by objective",
+                   "How setup profiles are distributed across each objective instance. "
+                   "Each pie is one objective; slice size is proportion of rows with that profile.",
+            _chart(A.fig_objective_profile_pies()))
+        + _section("Outcome label by objective",
+                   "How outcomes are distributed across each objective instance.",
+            _chart(A.fig_objective_outcome_pies()))
+        + _section("Gold % advantage needed to reach 50% secure rate",
+                   "Logistic regression curves fitted per setup profile on gold % advantage at T-60 "
+                   "(gold difference normalised by estimated team gold at that game time). "
+                   "Diamonds mark the breakeven % where predicted secure rate hits 50%.",
+            _chart(A.fig_gold_breakeven()),
+            _note("X-axis is gold lead as a percentage of estimated team gold at that point in the game, "
+                  "so early and late objectives are directly comparable. "
+                  "Free setup teams can be several percent behind in gold and still favour heavily. "
+                  "Disadvantaged contest teams are already below 50% near even gold."))
+        + _section("How setup profiles lead to outcomes",
+                   "Flow from pre-objective setup (left) to objective outcome (right). "
+                   "Width is proportional to the number of objective instances.",
+            _chart(A.fig_setup_outcome_sankey()),
+            _note("Gave away maps almost entirely to clean give or good trade. "
+                  "Disadvantaged flows into throw setup and coinflip more than any other profile."))
         + _section("Impact of key binary features",
                    "Secure rate with and without each binary feature.",
             _chart(A.fig_feature_impact()))
@@ -308,56 +330,10 @@ def page_conclusion() -> str:
     )
 
 
-# ── nav tab CSS override (replaces Dash dcc.Tabs styles) ─────────────────────
+# ── nav link CSS ──────────────────────────────────────────────────────────────
 
-_NAV_CSS = """
-.export-nav {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 0;
-}
-.export-tab {
-  height: 52px;
-  line-height: 52px;
-  padding: 0 2px;
-  margin-right: 28px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: #64748b;
-  font-size: 14px;
-  font-family: var(--font);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-.export-tab:hover { color: #1e293b; }
-.export-tab.active { color: #1e293b; border-bottom-color: #3d5af1; font-weight: 500; }
-"""
-
-_NAV_JS = """
-function showTab(name) {
-  document.querySelectorAll('.tab-pane').forEach(el => el.style.display = 'none');
-  document.querySelectorAll('.export-tab').forEach(el => el.classList.remove('active'));
-  document.getElementById('tab-' + name).style.display = 'block';
-  document.getElementById('btn-' + name).classList.add('active');
-}
-"""
-
-_TABS = [("home", "Home"), ("methods", "Methods"), ("analysis", "Analysis"), ("conclusion", "Conclusion")]
-
-
-def build_html(pages: dict[str, str]) -> str:
-    nav_btns = "".join(
-        f'<button id="btn-{k}" class="export-tab{" active" if k == "home" else ""}" '
-        f'onclick="showTab(\'{k}\')">{label}</button>'
-        for k, label in _TABS
-    )
-    tab_panes = "".join(
-        f'<div id="tab-{k}" class="tab-pane content-root" style="{"" if k == "home" else "display:none"}">'
-        f'{pages[k]}</div>'
-        for k, _ in _TABS
-    )
+def build_html(sections: list[str]) -> str:
+    body = "\n".join(f'<div class="content-root">{s}</div>' for s in sections)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -367,20 +343,12 @@ def build_html(pages: dict[str, str]) -> str:
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
 {_CSS}
-{_NAV_CSS}
 </style>
 </head>
 <body>
 <div class="app-root">
-  <header class="site-header">
-    <div class="header-inner">
-      <span class="site-logo">League Objective Analytics</span>
-      <nav class="export-nav">{nav_btns}</nav>
-    </div>
-  </header>
-  {tab_panes}
+  {body}
 </div>
-<script>{_NAV_JS}</script>
 </body>
 </html>"""
 
@@ -394,15 +362,15 @@ def main(argv: list[str] | None = None) -> None:
     args = p.parse_args(argv)
 
     print("[export] Rendering pages…")
-    pages = {
-        "home":       page_home(),
-        "methods":    page_methods(),
-        "analysis":   page_analysis(),
-        "conclusion": page_conclusion(),
-    }
+    sections = [
+        page_home(),
+        page_methods(),
+        page_analysis(),
+        page_conclusion(),
+    ]
 
     print("[export] Assembling HTML…")
-    html = build_html(pages)
+    html = build_html(sections)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(html, encoding="utf-8")

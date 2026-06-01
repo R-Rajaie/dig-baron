@@ -320,8 +320,20 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Riot queue ID (default 420 = ranked solo/duo)",
     )
     p.add_argument("--seed", type=int, default=None, help="RNG seed for reproducible sampling")
+    p.add_argument(
+        "--loop",
+        action="store_true",
+        help="Run continuously — start a new pass as soon as the previous one finishes.",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
+
+
+def _count_cached() -> int:
+    """Return number of match JSON files in the raw cache."""
+    from ..config import RAW_DIR
+    d = RAW_DIR / "matches"
+    return sum(1 for _ in d.glob("*.json")) if d.exists() else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -333,13 +345,40 @@ def main(argv: list[str] | None = None) -> int:
     if args.seed is not None:
         random.seed(args.seed)
 
-    seed_matches(
-        platforms=args.regions,
-        buckets=args.tiers,
-        players_per_tier=args.players_per_tier,
-        matches_per_player=args.matches_per_player,
-        queue=args.queue,
-    )
+    pass_num = 0
+    while True:
+        pass_num += 1
+        before = _count_cached()
+        t0 = time.monotonic()
+
+        if args.loop:
+            print(f"\n{'='*58}")
+            print(f"  Pass {pass_num}  |  {before:,} matches cached so far")
+            print(f"{'='*58}\n")
+
+        try:
+            seed_matches(
+                platforms=args.regions,
+                buckets=args.tiers,
+                players_per_tier=args.players_per_tier,
+                matches_per_player=args.matches_per_player,
+                queue=args.queue,
+            )
+        except KeyboardInterrupt:
+            after = _count_cached()
+            mins = (time.monotonic() - t0) / 60
+            print(f"\nStopped.  +{after - before:,} new matches this pass  |  "
+                  f"{after:,} total  |  {mins:.1f} min elapsed")
+            return 0
+
+        after = _count_cached()
+        mins = (time.monotonic() - t0) / 60
+        print(f"\nPass {pass_num} done — +{after - before:,} new  |  "
+              f"{after:,} total  |  {mins:.1f} min")
+
+        if not args.loop:
+            break
+
     return 0
 
 

@@ -37,7 +37,7 @@ RANK_ORDER = ["low", "mid", "high", "elite", "unknown"]
 # Presence check (nearby_T_30) captures who showed up to fight.
 # Rules applied in reverse order (last listed = highest priority).
 _PROFILE_RULES = [
-    ("both_absent", "team_nearby_T_30 == 0 and enemy_nearby_T_30 == 0"),
+    ("no_early_setup", "team_nearby_T_30 == 0 and enemy_nearby_T_30 == 0"),
     ("gave_away", "team_nearby_T_30 == 0 and enemy_nearby_T_30 >= 1"),
     ("free_setup_deaths", "team_nearby_T_30 >= 1 and enemy_nearby_T_30 == 0 and team_deaths_60s >= 1"),
     ("free_setup", "team_nearby_T_30 >= 1 and enemy_nearby_T_30 == 0 and team_deaths_60s == 0"),
@@ -55,7 +55,7 @@ _PROFILE_RULES = [
 _PROFILE_DEFAULT = "clean_contest"   # catch-all (should be empty with the rules above)
 
 PROFILE_ORDER = [
-    "both_absent", "gave_away",
+    "no_early_setup", "gave_away",
     "free_setup", "free_setup_deaths",
     "clean_contest", "disadvantaged",
 ]
