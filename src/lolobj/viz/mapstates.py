@@ -65,15 +65,14 @@ _B_MID_LANE = (0.460, 0.622)   # blue-side mid lane
 _B_TOP_LANE = (0.128, 0.298)   # blue top lane (left edge)
 
 # Red in lanes / jungle
-# Red's bot lane (ADC + support) is in the top-left of the map.
-# Red's top laner and jungler are on botside (bottom half of image):
-#   top laner is on the right edge (red's top lane = blue's bot side),
-#   jungler is near red buff which sits mid-right, just below centre.
-_R_JG_LANE  = (0.742, 0.512)   # near red buff — botside, right of centre
-_R_ADC_LANE = (0.240, 0.118)   # red bot lane, further up
-_R_SUP_LANE = (0.168, 0.205)   # red bot lane, further back toward tower
+# Bot lane runs along the BOTTOM/RIGHT edge — both teams' ADC/support are in
+# the bottom-right of the map.  Red's top lane runs along the TOP/LEFT edge,
+# so their top laner is in the top-left area (same physical side as blue top).
+_R_JG_LANE  = (0.742, 0.512)   # near red buff — right side, just below centre
+_R_ADC_LANE = (0.858, 0.872)   # red bot lane — bottom-right of map
+_R_SUP_LANE = (0.828, 0.912)   # red bot lane — near ADC, slightly different spot
 _R_MID_LANE = (0.538, 0.448)   # red-side mid lane
-_R_TOP_LANE = (0.858, 0.752)   # red top lane — botside, right edge
+_R_TOP_LANE = (0.175, 0.192)   # red top lane — top-left edge
 
 # Convenience lists
 _BLUE_AT_DRAGON = [_B_JG_DRAG, _B_ADC_DRAG, _B_SUP_DRAG, _B_MID_DRAG, _B_TOP_DRAG]
