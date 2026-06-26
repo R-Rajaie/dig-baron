@@ -38,34 +38,42 @@ DRAGON: tuple[float, float] = (0.666, 0.703)
 # ── individual role positions ─────────────────────────────────────────────────
 # Blue side: base is bottom-left; bot lane runs along bottom/right edges.
 # Red side:  base is top-right;  bot lane runs along top/left edges.
+#
+# "Botside" = lower half of image (ny > 0.5) = dragon side.
+# "Topside" = upper half (ny < 0.5) = baron / red base side.
 
-# Blue at dragon — jungler at pit, ADC+support together, mid/top rotating in
+# Blue at dragon — jungler at pit, others rotating in from their angles
 _B_JG_DRAG  = (0.648, 0.690)
-_B_ADC_DRAG = (0.740, 0.768)
-_B_SUP_DRAG = (0.716, 0.745)   # close to ADC
+_B_ADC_DRAG = (0.742, 0.770)
+_B_SUP_DRAG = (0.708, 0.740)
 _B_MID_DRAG = (0.606, 0.674)
 _B_TOP_DRAG = (0.633, 0.728)
 
 # Red at dragon — approaching from their side (northeast of pit)
 _R_JG_DRAG  = (0.712, 0.606)
-_R_ADC_DRAG = (0.680, 0.582)
-_R_SUP_DRAG = (0.666, 0.628)   # close to red ADC
+_R_ADC_DRAG = (0.682, 0.580)
+_R_SUP_DRAG = (0.660, 0.624)
 _R_MID_DRAG = (0.610, 0.568)
 _R_TOP_DRAG = (0.748, 0.656)
 
-# Blue in lanes / jungle — not rotating to dragon yet
-_B_JG_LANE  = (0.340, 0.592)   # blue-side jungle (wolves/blue buff area)
-_B_ADC_LANE = (0.772, 0.858)   # blue bot lane
-_B_SUP_LANE = (0.748, 0.830)   # with ADC, slightly toward river
+# Blue in lanes / jungle — not rotating to dragon
+# ADC is ahead in bot lane; support is back in the same lane, not touching.
+_B_JG_LANE  = (0.338, 0.595)   # blue-side jungle (wolves / blue buff area)
+_B_ADC_LANE = (0.800, 0.848)   # farther up bot lane (toward dragon side)
+_B_SUP_LANE = (0.745, 0.900)   # further back in bot lane, near tower
 _B_MID_LANE = (0.460, 0.622)   # blue-side mid lane
 _B_TOP_LANE = (0.128, 0.298)   # blue top lane (left edge)
 
 # Red in lanes / jungle
-_R_JG_LANE  = (0.664, 0.408)   # red-side jungle (near red buff)
-_R_ADC_LANE = (0.225, 0.138)   # red bot lane (top-left of map)
-_R_SUP_LANE = (0.196, 0.166)   # with red ADC
+# Red's bot lane (ADC + support) is in the top-left of the map.
+# Red's top laner and jungler are on botside (bottom half of image):
+#   top laner is on the right edge (red's top lane = blue's bot side),
+#   jungler is near red buff which sits mid-right, just below centre.
+_R_JG_LANE  = (0.742, 0.512)   # near red buff — botside, right of centre
+_R_ADC_LANE = (0.240, 0.118)   # red bot lane, further up
+_R_SUP_LANE = (0.168, 0.205)   # red bot lane, further back toward tower
 _R_MID_LANE = (0.538, 0.448)   # red-side mid lane
-_R_TOP_LANE = (0.858, 0.752)   # red top lane (bottom-right edge)
+_R_TOP_LANE = (0.858, 0.752)   # red top lane — botside, right edge
 
 # Convenience lists
 _BLUE_AT_DRAGON = [_B_JG_DRAG, _B_ADC_DRAG, _B_SUP_DRAG, _B_MID_DRAG, _B_TOP_DRAG]
@@ -211,7 +219,6 @@ def _draw_scene(
         ax.scatter(bxs, bys, s=260, marker="X", color="#93c5fd",
                    edgecolors="#3b82f6", linewidths=1.2, alpha=0.55, zorder=7)
 
-    # Title above axes with accent colour
     ax.set_title(
         title,
         fontsize=10.5,
@@ -220,17 +227,11 @@ def _draw_scene(
         pad=5,
         bbox=dict(boxstyle="square,pad=0.35", facecolor=accent, edgecolor="none"),
     )
-
-    # Subtitle inside the map at the bottom edge — avoids overlap with the
-    # next row's title, which happens when the text lives below the axes.
     ax.text(
-        w * 0.5, h * 0.962,
-        subtitle,
-        fontsize=7.5, color="#1e293b",
-        ha="center", va="bottom",
-        bbox=dict(boxstyle="round,pad=0.28", facecolor="white",
-                  alpha=0.88, edgecolor="#e2e8f0"),
-        zorder=15,
+        0.5, -0.02, subtitle,
+        transform=ax.transAxes,
+        fontsize=7.8, color="#475569",
+        ha="center", va="top",
     )
 
 
@@ -295,6 +296,7 @@ def fig_mapstates_grid() -> plt.Figure:
         y=0.995,
     )
     fig.tight_layout(rect=[0, 0.06, 1, 0.99])
+    fig.subplots_adjust(hspace=0.28)
     return fig
 
 
