@@ -18,9 +18,13 @@ if str(_SRC) not in sys.path:
 
 print("[png-export] Loading app (this loads data, trains models, computes SHAP)...")
 import lolobj.webapp.app as A
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from lolobj.viz.mapstates import fig_mapstates_grid
 import plotly.graph_objects as go
 
-_W, _H = 1400, 800
+_W, _H = 2400, 1350
 
 # ── definition table helpers ──────────────────────────────────────────────────
 
@@ -45,6 +49,7 @@ def _table_fig(
     title: str,
     row_colors: list[str] | None = None,
     height: int = _H,
+    fig_width: int | None = None,
 ) -> go.Figure:
     """Build a styled Plotly table figure."""
     transposed = list(map(list, zip(*rows)))
@@ -60,27 +65,30 @@ def _table_fig(
         header=dict(
             values=[f"<b>{h}</b>" for h in headers],
             fill_color=_HEADER_FILL,
-            font=dict(color=_HEADER_FONT, size=13, family="Inter, Arial, sans-serif"),
+            font=dict(color=_HEADER_FONT, size=16, family="Inter, Arial, sans-serif"),
             align="left",
-            height=36,
+            height=44,
             line_color=_BORDER,
         ),
         cells=dict(
             values=transposed,
             fill_color=cell_fills,
-            font=dict(color="#1e293b", size=12, family="Inter, Arial, sans-serif"),
+            font=dict(color="#1e293b", size=14, family="Inter, Arial, sans-serif"),
             align="left",
-            height=32,
+            height=38,
             line_color=_BORDER,
         ),
     ))
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=16, family="Inter, Arial, sans-serif",
-                                          color="#1e293b"), x=0.0, xanchor="left", pad=dict(l=8)),
+    layout_kwargs: dict = dict(
+        title=dict(text=title, font=dict(size=20, family="Inter, Arial, sans-serif",
+                                          color="#1e293b"), x=0.5, xanchor="center"),
         margin=dict(l=24, r=24, t=56, b=24),
         paper_bgcolor="#ffffff",
         height=height,
     )
+    if fig_width is not None:
+        layout_kwargs["width"] = fig_width
+    fig.update_layout(**layout_kwargs)
     return fig
 
 
@@ -89,13 +97,15 @@ def fig_setup_profile_defs() -> go.Figure:
     for name, tag, condition, meaning in A.PROFILE_DEFS:
         rows.append([name.replace("_", " "), condition, meaning])
         colors.append(_QUALITY_COLOR.get(tag, _ROW_EVEN))
+    # col_widths proportional to max content length per column: [17, 72, 53]
     return _table_fig(
         headers=["Profile", "Condition (T-30)", "Strategic meaning"],
         rows=rows,
-        col_widths=[18, 42, 42],
+        col_widths=[17, 72, 53],
         title="Setup Profile Definitions",
         row_colors=colors,
-        height=max(300, 80 + len(rows) * 48),
+        height=max(320, 100 + len(rows) * 56),
+        fig_width=1200,
     )
 
 
@@ -104,13 +114,15 @@ def fig_outcome_label_defs() -> go.Figure:
     for name, tag, desc in A.OUTCOME_DEFS:
         rows.append([name.replace("_", " "), tag, desc])
         colors.append(_QUALITY_COLOR.get(tag, _ROW_EVEN))
+    # col_widths proportional to max content length per column: [24, 7, 74]
     return _table_fig(
         headers=["Outcome label", "Quality", "Description"],
         rows=rows,
-        col_widths=[22, 12, 66],
+        col_widths=[24, 7, 74],
         title="Outcome Label Definitions",
         row_colors=colors,
-        height=max(300, 80 + len(rows) * 48),
+        height=max(320, 100 + len(rows) * 56),
+        fig_width=1000,
     )
 
 
@@ -143,21 +155,24 @@ def fig_state_bucket_defs() -> go.Figure:
         rows=gold_rows, col_widths=[20, 80],
         title="State Bucket Definitions  --  Gold State (T-60)",
         row_colors=gold_colors,
-        height=80 + len(gold_rows) * 48,
+        height=max(320, 100 + len(gold_rows) * 56),
+        fig_width=480,
     )
     alive_fig = _table_fig(
         headers=["Alive state bucket", "Definition"],
-        rows=alive_rows, col_widths=[20, 80],
+        rows=alive_rows, col_widths=[30, 70],
         title="State Bucket Definitions  --  Alive State (T-60)",
         row_colors=alive_colors,
-        height=80 + len(alive_rows) * 48,
+        height=max(320, 100 + len(alive_rows) * 56),
+        fig_width=430,
     )
     death_fig = _table_fig(
         headers=["Death state", "Definition (standalone feature, not part of combined bucket)"],
         rows=death_rows, col_widths=[22, 78],
         title="State Bucket Definitions  --  Death State (T-90 window)",
         row_colors=death_colors,
-        height=80 + len(death_rows) * 48,
+        height=max(320, 100 + len(death_rows) * 56),
+        fig_width=520,
     )
     return gold_fig, alive_fig, death_fig
 
@@ -189,22 +204,28 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--out", type=Path, default=_ROOT / "exports" / "charts")
     p.add_argument("--width",  type=int, default=_W)
     p.add_argument("--height", type=int, default=_H)
-    p.add_argument("--scale",  type=float, default=2.0)
+    p.add_argument("--scale",  type=float, default=3.0)
     args = p.parse_args(argv)
 
     args.out.mkdir(parents=True, exist_ok=True)
 
+    # Figures with their own layout.width use a boosted scale so the output
+    # pixel count stays comparable to the standard 2400×scale charts.
+    _target_px = args.width * args.scale
+
     for name, fig in CHARTS:
         out_path = args.out / f"{name}.png"
         print(f"[png-export] {name} ...")
+        fig_w = fig.layout.width if fig.layout.width else args.width
+        fig_scale = min(round(_target_px / fig_w), 4) if fig.layout.width else args.scale
         fig.write_image(
             str(out_path),
             format="png",
-            width=args.width,
+            width=fig_w,
             height=fig.layout.height if fig.layout.height else args.height,
-            scale=args.scale,
+            scale=fig_scale,
         )
-        print(f"             saved: {out_path}")
+        print(f"             saved: {out_path}  ({int(fig_w * fig_scale)}px wide)")
 
     # SHAP image is stored as a base64 data URI
     shap_src: str = A._SHAP_IMG_SRC
@@ -218,21 +239,34 @@ def main(argv: list[str] | None = None) -> None:
         print(f"[png-export] SHAP image is not a base64 PNG, skipping ({shap_src[:60]}...)")
 
     # State bucket definitions: three separate tables
+    # Use a fixed scale (4) so small fig_widths don't get blown up to _target_px.
+    _BUCKET_SCALE = 4
     gold_fig, alive_fig, death_fig = fig_state_bucket_defs()
     for suffix, fig in [("gold", gold_fig), ("alive", alive_fig), ("death", death_fig)]:
         name = f"16_state_bucket_definitions_{suffix}"
         out_path = args.out / f"{name}.png"
         print(f"[png-export] {name} ...")
+        fig_w = fig.layout.width if fig.layout.width else args.width
+        fig_scale = _BUCKET_SCALE
         fig.write_image(
             str(out_path),
             format="png",
-            width=args.width,
+            width=fig_w,
             height=fig.layout.height if fig.layout.height else args.height,
-            scale=args.scale,
+            scale=fig_scale,
         )
-        print(f"             saved: {out_path}")
+        print(f"             saved: {out_path}  ({int(fig_w * fig_scale)}px wide)")
 
-    total = len(CHARTS) + 1 + 3  # plotly + shap + 3 state bucket tables
+    # Setup profile map states (matplotlib figure)
+    print("[png-export] 17_setup_profile_mapstates ...")
+    mfig = fig_mapstates_grid()
+    mout = args.out / "17_setup_profile_mapstates.png"
+    mfig.savefig(str(mout), dpi=180, bbox_inches="tight",
+                 facecolor=mfig.get_facecolor())
+    plt.close(mfig)
+    print(f"             saved: {mout}")
+
+    total = len(CHARTS) + 1 + 3 + 1  # plotly + shap + 3 state bucket tables + mapstates
     print(f"\n[png-export] Done -- {total} files written to {args.out}/")
 
 
