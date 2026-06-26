@@ -35,58 +35,63 @@ _OUTDIR = _ROOT / "exports" / "charts"
 # ── key map locations (normalized, y = 0 at top) ─────────────────────────────
 DRAGON: tuple[float, float] = (0.666, 0.703)
 
-# ── archetypal champion positions ─────────────────────────────────────────────
-# Blue team approaching dragon from their side (south/southwest of Dragon pit)
-_BLUE_AT_DRAGON = [
-    (0.645, 0.685),  # Jungler — at pit edge
-    (0.740, 0.780),  # ADC — coming up from bot lane
-    (0.715, 0.745),  # Support — flanking with ADC
-    (0.605, 0.675),  # Mid — rotated down
-    (0.635, 0.730),  # Top — rotated in
-]
+# ── individual role positions ─────────────────────────────────────────────────
+# Blue side: base is bottom-left; bot lane runs along bottom/right edges.
+# Red side:  base is top-right;  bot lane runs along top/left edges.
 
-# Red team approaching dragon from their side (north/northeast of Dragon pit)
-_RED_AT_DRAGON = [
-    (0.710, 0.600),  # Red jungler
-    (0.658, 0.575),  # Red ADC
-    (0.685, 0.625),  # Red support
-    (0.610, 0.570),  # Red mid
-    (0.745, 0.655),  # Red top
-]
+# Blue at dragon — jungler at pit, ADC+support together, mid/top rotating in
+_B_JG_DRAG  = (0.648, 0.690)
+_B_ADC_DRAG = (0.740, 0.768)
+_B_SUP_DRAG = (0.716, 0.745)   # close to ADC
+_B_MID_DRAG = (0.606, 0.674)
+_B_TOP_DRAG = (0.633, 0.728)
 
-# Blue team scattered in their lanes / jungle — far from dragon
-_BLUE_IN_LANES = [
-    (0.770, 0.870),  # ADC — blue bot lane
-    (0.740, 0.835),  # Support — with ADC
-    (0.385, 0.635),  # Jungler — blue-side jungle
-    (0.500, 0.550),  # Mid — mid lane
-    (0.140, 0.240),  # Top — blue top lane (top-left of map)
-]
+# Red at dragon — approaching from their side (northeast of pit)
+_R_JG_DRAG  = (0.712, 0.606)
+_R_ADC_DRAG = (0.680, 0.582)
+_R_SUP_DRAG = (0.666, 0.628)   # close to red ADC
+_R_MID_DRAG = (0.610, 0.568)
+_R_TOP_DRAG = (0.748, 0.656)
 
-# Red team scattered in their lanes / jungle — far from dragon
-_RED_IN_LANES = [
-    (0.220, 0.130),  # Red ADC — red bot = top-left of map
-    (0.170, 0.185),  # Red support
-    (0.630, 0.380),  # Red jungler
-    (0.520, 0.465),  # Red mid
-    (0.855, 0.755),  # Red top — red top = bottom-right of map
-]
+# Blue in lanes / jungle — not rotating to dragon yet
+_B_JG_LANE  = (0.340, 0.592)   # blue-side jungle (wolves/blue buff area)
+_B_ADC_LANE = (0.772, 0.858)   # blue bot lane
+_B_SUP_LANE = (0.748, 0.830)   # with ADC, slightly toward river
+_B_MID_LANE = (0.460, 0.622)   # blue-side mid lane
+_B_TOP_LANE = (0.128, 0.298)   # blue top lane (left edge)
+
+# Red in lanes / jungle
+_R_JG_LANE  = (0.664, 0.408)   # red-side jungle (near red buff)
+_R_ADC_LANE = (0.225, 0.138)   # red bot lane (top-left of map)
+_R_SUP_LANE = (0.196, 0.166)   # with red ADC
+_R_MID_LANE = (0.538, 0.448)   # red-side mid lane
+_R_TOP_LANE = (0.858, 0.752)   # red top lane (bottom-right edge)
+
+# Convenience lists
+_BLUE_AT_DRAGON = [_B_JG_DRAG, _B_ADC_DRAG, _B_SUP_DRAG, _B_MID_DRAG, _B_TOP_DRAG]
+_RED_AT_DRAGON  = [_R_JG_DRAG, _R_ADC_DRAG, _R_SUP_DRAG, _R_MID_DRAG, _R_TOP_DRAG]
+_BLUE_IN_LANES  = [_B_JG_LANE, _B_ADC_LANE, _B_SUP_LANE, _B_MID_LANE, _B_TOP_LANE]
+_RED_IN_LANES   = [_R_JG_LANE, _R_ADC_LANE, _R_SUP_LANE, _R_MID_LANE, _R_TOP_LANE]
 
 # Ward positions near dragon (vision control)
-_WARDS_FULL  = [(0.700, 0.645), (0.760, 0.720), (0.615, 0.760)]
-_WARDS_THIN  = [(0.700, 0.645), (0.760, 0.720)]
-_WARDS_ONE   = [(0.700, 0.645)]
-_WARDS_NONE  = []
+_WARDS_FULL = [(0.700, 0.645), (0.758, 0.618), (0.612, 0.758)]
+_WARDS_THIN = [(0.700, 0.645), (0.758, 0.618)]
+_WARDS_ONE  = [(0.700, 0.645)]
+_WARDS_NONE: list = []
 
 # ── profile definitions ───────────────────────────────────────────────────────
-# (key, display_title, subtitle_line1, subtitle_line2, accent_color,
+# (key, display_title, subtitle, accent_color,
 #  blue_alive, blue_dead, red_alive, red_dead, wards)
+#
+# For free_setup_deaths: mid/top died in their lanes before rotating — dead
+# markers appear at their lane positions, not at dragon.
+# For disadvantaged: mid/top were at dragon but died in the pre-fight — dead
+# markers appear near the pit.
 PROFILES = [
     (
         "free_setup",
         "Free Setup",
-        "Team present · Enemy absent",
-        "No recent allied deaths",
+        "Team present · Enemy absent · No recent allied deaths",
         "#10b981",
         _BLUE_AT_DRAGON, [],
         _RED_IN_LANES,   [],
@@ -95,18 +100,17 @@ PROFILES = [
     (
         "free_setup_deaths",
         "Free Setup (with Deaths)",
-        "Team present · Enemy absent",
-        "Allied deaths in the prior 60s",
+        "Team present · Enemy absent · Allied deaths in the prior 60s",
         "#f59e0b",
-        _BLUE_AT_DRAGON[:3], _BLUE_AT_DRAGON[3:],  # 3 alive, 2 dead
-        _RED_IN_LANES,        [],
+        [_B_JG_DRAG, _B_ADC_DRAG, _B_SUP_DRAG],   # JG+ADC+support alive at dragon
+        [_B_MID_LANE, _B_TOP_LANE],                 # mid/top died in their lanes
+        _RED_IN_LANES, [],
         _WARDS_THIN,
     ),
     (
         "clean_contest",
         "Clean Contest",
-        "Both teams present",
-        "Team not short-handed",
+        "Both teams present · Team not short-handed",
         "#a78bfa",
         _BLUE_AT_DRAGON, [],
         _RED_AT_DRAGON,  [],
@@ -115,18 +119,17 @@ PROFILES = [
     (
         "disadvantaged",
         "Disadvantaged",
-        "Both teams present",
-        "Team had recent deaths / fewer alive",
+        "Both teams present · Team had recent deaths or fewer alive",
         "#ef4444",
-        _BLUE_AT_DRAGON[:3], _BLUE_AT_DRAGON[3:],  # 3 alive, 2 dead
-        _RED_AT_DRAGON,      [],
+        [_B_JG_DRAG, _B_ADC_DRAG, _B_SUP_DRAG],   # 3 alive at dragon
+        [_B_MID_DRAG, _B_TOP_DRAG],                 # mid/top died near pit
+        _RED_AT_DRAGON, [],
         _WARDS_NONE,
     ),
     (
         "gave_away",
         "Gave Away",
-        "Enemy present at objective",
-        "Team did not show up",
+        "Enemy present at objective · Team did not show up",
         "#64748b",
         _BLUE_IN_LANES, [],
         _RED_AT_DRAGON, [],
@@ -135,8 +138,7 @@ PROFILES = [
     (
         "no_early_setup",
         "No Early Setup",
-        "Neither team near objective at T-30",
-        "Neither side committed",
+        "Neither team near objective at T-30 · Neither side committed",
         "#94a3b8",
         _BLUE_IN_LANES, [],
         _RED_IN_LANES,  [],
@@ -164,14 +166,13 @@ def _draw_scene(
     red_dead:   list[tuple[float, float]],
     wards:      list[tuple[float, float]],
     title: str,
-    sub1: str,
-    sub2: str,
+    subtitle: str,
     accent: str,
 ) -> None:
     h, w = img.shape[:2]
-    ax.imshow(img)          # default: origin='upper', pixel coords
+    ax.imshow(img)
     ax.set_xlim(0, w)
-    ax.set_ylim(h, 0)       # y=0 at top, y=h at bottom
+    ax.set_ylim(h, 0)   # y=0 at top, y=h at bottom
     ax.set_aspect("equal")
     ax.axis("off")
 
@@ -210,6 +211,7 @@ def _draw_scene(
         ax.scatter(bxs, bys, s=260, marker="X", color="#93c5fd",
                    edgecolors="#3b82f6", linewidths=1.2, alpha=0.55, zorder=7)
 
+    # Title above axes with accent colour
     ax.set_title(
         title,
         fontsize=10.5,
@@ -218,11 +220,17 @@ def _draw_scene(
         pad=5,
         bbox=dict(boxstyle="square,pad=0.35", facecolor=accent, edgecolor="none"),
     )
+
+    # Subtitle inside the map at the bottom edge — avoids overlap with the
+    # next row's title, which happens when the text lives below the axes.
     ax.text(
-        0.5, -0.02, f"{sub1}\n{sub2}",
-        transform=ax.transAxes,
-        fontsize=7.8, color="#475569",
-        ha="center", va="top", linespacing=1.5,
+        w * 0.5, h * 0.962,
+        subtitle,
+        fontsize=7.5, color="#1e293b",
+        ha="center", va="bottom",
+        bbox=dict(boxstyle="round,pad=0.28", facecolor="white",
+                  alpha=0.88, edgecolor="#e2e8f0"),
+        zorder=15,
     )
 
 
@@ -233,13 +241,13 @@ def fig_mapstates_grid() -> plt.Figure:
     fig, axes = plt.subplots(2, 3, figsize=(15, 11.5))
     fig.patch.set_facecolor("#f8fafc")
 
-    for ax, (key, title, sub1, sub2, accent,
+    for ax, (key, title, subtitle, accent,
               blue_alive, blue_dead, red_alive, red_dead, wards) in zip(
         axes.flat, PROFILES
     ):
         _draw_scene(ax, img, blue_alive, blue_dead,
                     red_alive, red_dead, wards,
-                    title, sub1, sub2, accent)
+                    title, subtitle, accent)
 
     # Legend
     legend_handles = [
