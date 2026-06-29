@@ -243,7 +243,10 @@ class ObjectiveWindowRow:
 
     # Labels
     secured: int = 0
-    outcome_label: str = ""
+    fight_result: str = ""       # won | lost | draw | none
+    objective_result: str = ""   # secured | lost
+    good_trade: int = 0          # 1 if meaningful trade after giving objective
+    steal: int = 0               # 1 if secured while absent or outnumbered
     net_value: int = 0
 
     extra: dict[str, Any] = field(default_factory=dict)
@@ -496,9 +499,11 @@ def _build_one_row(
 
     # ---- Outcome + net value (labels, not features) ----
     row.secured = int(ev.killer_team_id == team_id)
-    row.outcome_label = classify_outcome(
-        ev, team_id, timeline, meta_team_ids, tracks
-    )
+    outcome = classify_outcome(ev, team_id, timeline, meta_team_ids, tracks)
+    row.fight_result = outcome["fight_result"]
+    row.objective_result = outcome["objective_result"]
+    row.good_trade = int(outcome["good_trade"])
+    row.steal = int(outcome["steal"])
     row.net_value = score_objective(
         ev, team_id, timeline, meta, tracks
     )

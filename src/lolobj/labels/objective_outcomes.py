@@ -1,16 +1,17 @@
-"""Outcome label classification per CLAUDE.md taxonomy.
+"""Outcome classification per objective window.
 
-Labels (from team_id's perspective):
-    clean_take               - secured objective, won/drew fight, good setup
-    clean_give               - gave objective, didn't contest, survived
-    good_trade               - gave objective but gained meaningful value elsewhere
-    bad_contest              - contested from disadvantage, lost fight, lost objective
-    won_fight_lost_objective - won the fight but lost the objective (e.g., enemy steal)
-    lost_fight_got_objective - secured objective despite losing the surrounding fight
-    objective_steal          - secured objective while clearly outnumbered nearby
-    coinflip                 - both teams evenly present, outcome roughly 50/50
-    throw_setup              - had good setup but pre-fight deaths led to losing objective
-    no_meaningful_contest    - neither team was meaningfully contesting
+Returns four orthogonal fields (from team_id's perspective):
+
+    fight_result    - "won" | "lost" | "draw" | "none"
+                      won/lost/draw when both teams were present at T-30;
+                      none when only one team (or neither) was present.
+    objective_result - "secured" | "lost"
+    good_trade      - True if team lost the objective but gained meaningful
+                      value elsewhere in the aftermath (tower or opposite-side
+                      objective within T+120s).
+    steal           - True if team secured the objective while absent at T-30
+                      (team_nearby == 0) or clearly outnumbered
+                      (enemy_nearby >= team_nearby + 2).
 
 Uses only events up to T+120 (no leakage beyond the aftermath window).
 """
@@ -45,7 +46,7 @@ def classify_outcome(
     timeline: Timeline,
     meta_team_ids: dict[int, int],
     tracks: dict[int, _ParticipantTrack],
-) -> str:
+) -> dict[str, str | bool]:
     """Classify the objective outcome from ``team_id``'s perspective."""
     enemy_team = 200 if team_id == 100 else 100
     T = ev.timestamp_ms
@@ -60,9 +61,6 @@ def classify_outcome(
     team_nearby = sf.nearby_champion_count(tracks, team_pids, obj_pos, t_minus_30)
     enemy_nearby = sf.nearby_champion_count(tracks, enemy_pids, obj_pos, t_minus_30)
 
-    # Deaths in [T-30, T) — critical window; T-60+ has near-zero correlation with outcome
-    pre_obj_deaths = _deaths_in_window(tracks, team_pids, max(0, T - 30_000), T)
-
     fight_from, fight_to = T - 30_000, T + 30_000
     kills_fight = tf.kills_in_window(timeline, team_id, fight_from, fight_to)
     deaths_fight = tf.deaths_in_window_team(timeline, team_id, fight_from, fight_to)
@@ -75,51 +73,27 @@ def classify_outcome(
     )
     meaningful_trade = opp_obj > 0 or towers_after > 0
 
-    # 1. Neither team present
-    if team_nearby == 0 and enemy_nearby == 0:
-        return "no_meaningful_contest"
+    fight_happened = team_nearby >= 1 and enemy_nearby >= 1
+    if fight_happened:
+        if kills_fight > deaths_fight:
+            fight_result = "won"
+        elif deaths_fight > kills_fight:
+            fight_result = "lost"
+        else:
+            fight_result = "draw"
+    else:
+        fight_result = "none"
 
-    # 2. Team not present at T-30 — gave the objective (or smite-stole from fog)
-    if team_nearby == 0:
-        if secured:
-            # Arrived/smited from outside the nearby radius — counts as a steal
-            return "objective_steal"
-        if meaningful_trade:
-            return "good_trade"
-        return "clean_give"
+    objective_result = "secured" if secured else "lost"
+    good_trade = (not secured) and meaningful_trade
+    steal = secured and (
+        (team_nearby == 0 and enemy_nearby >= 1)  # absent but enemy was present
+        or enemy_nearby >= team_nearby + 2         # dramatically outnumbered
+    )
 
-    # 3. Team was present
-
-    # Steal: secured despite being clearly outnumbered nearby
-    if secured and enemy_nearby >= team_nearby + 2:
-        return "objective_steal"
-
-    # Secured but surrounding fight was lost — only meaningful when enemy was present;
-    # without enemy_nearby >= 1 the deaths came from elsewhere on the map, not this fight.
-    if secured and enemy_nearby >= 1 and deaths_fight > kills_fight:
-        return "lost_fight_got_objective"
-
-    # Won the fight but lost the objective (enemy steal)
-    if not secured and enemy_nearby >= 1 and kills_fight > deaths_fight:
-        return "won_fight_lost_objective"
-
-    # Pre-fight deaths led to losing the objective
-    if not secured and pre_obj_deaths >= 1 and deaths_fight >= kills_fight:
-        return "throw_setup"
-
-    # Contested and lost with no prior setup deaths
-    if not secured:
-        if meaningful_trade:
-            return "good_trade"
-        return "bad_contest"
-
-    # Secured — determine quality
-    # Coinflip: both teams evenly present, fight was close
-    if (
-        enemy_nearby >= 1
-        and abs(team_nearby - enemy_nearby) <= 1
-        and abs(kills_fight - deaths_fight) <= 1
-    ):
-        return "coinflip"
-
-    return "clean_take"
+    return {
+        "fight_result": fight_result,
+        "objective_result": objective_result,
+        "good_trade": good_trade,
+        "steal": steal,
+    }

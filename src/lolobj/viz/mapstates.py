@@ -188,12 +188,6 @@ def _draw_scene(
     ax.scatter(dx, dy, s=350, marker="*", color="#fbbf24",
                edgecolors="#92400e", linewidths=1.8, zorder=10)
 
-    # Vision wards
-    wxs, wys = _to_px(wards, w, h)
-    if wxs:
-        ax.scatter(wxs, wys, s=80, marker="D", color="#fde68a",
-                   edgecolors="#d97706", linewidths=1.2, zorder=8)
-
     # Red alive
     rxs, rys = _to_px(red_alive, w, h)
     if rxs:
@@ -271,10 +265,6 @@ def fig_mapstates_grid() -> plt.Figure:
                markerfacecolor="#fbbf24", markersize=14,
                markeredgecolor="#92400e", markeredgewidth=1.5,
                label="Dragon (objective)"),
-        Line2D([0], [0], marker="D", color="none",
-               markerfacecolor="#fde68a", markersize=9,
-               markeredgecolor="#d97706", markeredgewidth=1.2,
-               label="Vision ward"),
     ]
     fig.legend(
         handles=legend_handles,

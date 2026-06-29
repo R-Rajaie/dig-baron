@@ -30,7 +30,7 @@ def _build(match, frames):
 
 
 def test_clean_take_label():
-    """Team 100 nearby, secures dragon uncontested → clean_take."""
+    """Team 100 nearby, secures dragon uncontested → secured, no fight, no steal."""
     match = make_match()
     frames = [
         make_frame(0),
@@ -44,11 +44,14 @@ def test_clean_take_label():
     ]
     timeline, tracks, meta, meta_team_ids = _build(match, frames)
     ev = extract_objective_events(timeline)[0]
-    assert classify_outcome(ev, 100, timeline, meta_team_ids, tracks) == "clean_take"
+    result = classify_outcome(ev, 100, timeline, meta_team_ids, tracks)
+    assert result["objective_result"] == "secured"
+    assert result["fight_result"] == "none"
+    assert result["steal"] == False
 
 
 def test_clean_give_label():
-    """Team 100 is far away, team 200 takes dragon → clean_give for team 100."""
+    """Team 100 is far away, team 200 takes dragon → lost, no fight, no good trade."""
     match = make_match()
     frames = [
         make_frame(0),
@@ -61,11 +64,14 @@ def test_clean_give_label():
     ]
     timeline, tracks, meta, meta_team_ids = _build(match, frames)
     ev = extract_objective_events(timeline)[0]
-    assert classify_outcome(ev, 100, timeline, meta_team_ids, tracks) == "clean_give"
+    result = classify_outcome(ev, 100, timeline, meta_team_ids, tracks)
+    assert result["objective_result"] == "lost"
+    assert result["fight_result"] == "none"
+    assert result["good_trade"] == False
 
 
-def test_bad_contest_label():
-    """Team 100 contests, loses 2 members in the fight, enemy takes dragon → bad_contest."""
+def test_lost_fight_lost_objective():
+    """Team 100 contests, loses 2 members in the fight, enemy takes dragon."""
     match = make_match()
     frames = [
         make_frame(0),
@@ -74,7 +80,6 @@ def test_bad_contest_label():
             7: NEARBY_POS, 8: NEARBY_POS,
         }),
         make_frame(_T, events=[
-            # Kills happen AT T so pre_obj_deaths = 0; deaths_fight = 2
             champion_kill_event(_T, killer_id=7, victim_id=2),
             champion_kill_event(_T, killer_id=8, victim_id=3),
             dragon_kill_event(_T, killer_team_id=200, killer_id=7),
@@ -83,11 +88,14 @@ def test_bad_contest_label():
     ]
     timeline, tracks, meta, meta_team_ids = _build(match, frames)
     ev = extract_objective_events(timeline)[0]
-    assert classify_outcome(ev, 100, timeline, meta_team_ids, tracks) == "bad_contest"
+    result = classify_outcome(ev, 100, timeline, meta_team_ids, tracks)
+    assert result["fight_result"] == "lost"
+    assert result["objective_result"] == "lost"
+    assert result["steal"] == False
 
 
-def test_throw_setup_label():
-    """Team 100 set up well but jungler dies 10s before dragon → throw_setup."""
+def test_pre_fight_death_loses_objective():
+    """Team 100 had good setup but jungler dies 10s before dragon → still lost fight + lost objective."""
     match = make_match()
     frames = [
         make_frame(0),
@@ -103,11 +111,13 @@ def test_throw_setup_label():
     ]
     timeline, tracks, meta, meta_team_ids = _build(match, frames)
     ev = extract_objective_events(timeline)[0]
-    assert classify_outcome(ev, 100, timeline, meta_team_ids, tracks) == "throw_setup"
+    result = classify_outcome(ev, 100, timeline, meta_team_ids, tracks)
+    assert result["fight_result"] == "lost"
+    assert result["objective_result"] == "lost"
 
 
 def test_won_fight_lost_objective_label():
-    """Team 100 kills 2 enemies but enemy jungler smites the dragon → won_fight_lost_objective."""
+    """Team 100 kills 2 enemies but enemy jungler smites the dragon."""
     match = make_match()
     frames = [
         make_frame(0),
@@ -118,31 +128,34 @@ def test_won_fight_lost_objective_label():
         make_frame(_T, events=[
             champion_kill_event(_T, killer_id=2, victim_id=7),
             champion_kill_event(_T, killer_id=3, victim_id=8),
-            # Team 200 still somehow gets the dragon (smite steal)
             dragon_kill_event(_T, killer_team_id=200, killer_id=9),
         ]),
         make_frame(_T + 60_000),
     ]
     timeline, tracks, meta, meta_team_ids = _build(match, frames)
     ev = extract_objective_events(timeline)[0]
-    assert classify_outcome(ev, 100, timeline, meta_team_ids, tracks) == "won_fight_lost_objective"
+    result = classify_outcome(ev, 100, timeline, meta_team_ids, tracks)
+    assert result["fight_result"] == "won"
+    assert result["objective_result"] == "lost"
 
 
 def test_objective_steal_label():
-    """Team 100 clearly outnumbered but secures dragon → objective_steal."""
+    """Team 100 clearly outnumbered but secures dragon → steal."""
     match = make_match()
     frames = [
         make_frame(0),
         make_frame(_T - 30_000, participant_positions={
-            2: NEARBY_POS,  # only 1 from team 100
-            7: NEARBY_POS, 8: NEARBY_POS, 9: NEARBY_POS,  # 3 from team 200
+            2: NEARBY_POS,
+            7: NEARBY_POS, 8: NEARBY_POS, 9: NEARBY_POS,
         }),
         make_frame(_T, events=[dragon_kill_event(_T, killer_team_id=100, killer_id=2)]),
         make_frame(_T + 60_000),
     ]
     timeline, tracks, meta, meta_team_ids = _build(match, frames)
     ev = extract_objective_events(timeline)[0]
-    assert classify_outcome(ev, 100, timeline, meta_team_ids, tracks) == "objective_steal"
+    result = classify_outcome(ev, 100, timeline, meta_team_ids, tracks)
+    assert result["steal"] == True
+    assert result["objective_result"] == "secured"
 
 
 def test_net_value_secured_positive():
@@ -174,7 +187,6 @@ def test_net_value_not_secured_zero_or_below():
 def test_net_value_jg_death_penalty():
     """Jungler death 45s before dragon (outside fight window) costs -2."""
     match = make_match()
-    # Death at T-45s: inside pre-obj window [T-60s, T) but OUTSIDE fight window [T-30s, T+30s)
     frames = [
         make_frame(0),
         make_frame(_T - 45_000, events=[
