@@ -1,6 +1,7 @@
 """League Objective Setup Analytics — data loading and figure generation."""
 from __future__ import annotations
 
+import colorsys
 import math
 import sys
 from pathlib import Path
@@ -185,16 +186,9 @@ print("[app] SHAP image loaded from notebooks/output.png")
 # ── definitions ──────────────────────────────────────────────────────────────
 
 OUTCOME_DEFS = [
-    ("clean_take",               "good",    "Team secured. Won the fight or there was no real fight."),
-    ("clean_give",               "neutral", "Enemy secured. Team did not contest, which may have been intentional."),
-    ("good_trade",               "good",    "Team gave the objective but picked up meaningful value elsewhere."),
-    ("coinflip",                 "neutral", "Both teams showed up with no clear advantage. Outcome was roughly 50/50."),
-    ("bad_contest",              "bad",     "Team contested from a weak spot (short-handed, recent deaths) and lost."),
-    ("won_fight_lost_objective", "bad",     "Team won the fight but still lost the objective."),
-    ("lost_fight_got_objective", "mixed",   "Team lost the fight but secured the objective anyway."),
-    ("throw_setup",              "bad",     "Team was in good shape but lost a player in the last 30s before the fight."),
-    ("objective_steal",          "mixed",   "Team secured from a clearly outnumbered position, usually via smite."),
-    ("no_meaningful_contest",    "neutral", "Neither team committed. Objective taken without a real fight."),
+    ("take",            "good", "Team secured the objective (contested or not -- see setup_profile)."),
+    ("lost_with_trade", "mixed", "Team lost the objective but gained meaningful value elsewhere in the aftermath."),
+    ("lost",            "bad", "Team lost the objective with nothing to show for it."),
 ]
 
 PROFILE_DEFS = [
@@ -202,7 +196,7 @@ PROFILE_DEFS = [
                                      "Full positional control. Secure rate is highest here."),
     ("free_setup_deaths", "mixed",   "Team present, enemy absent, but allied deaths in the prior 60s.",
                                      "Uncontested positionally but down a player or two."),
-    ("clean_contest",     "neutral", "Both teams near objective, team not short-handed or behind on health.",
+    ("clean_contest",     "neutral", "Both teams near objective, team even or ahead in numbers.",
                                      "Even or favorable fight with both sides present."),
     ("disadvantaged",     "bad",     "Both teams present, but team had recent deaths or fewer alive champions.",
                                      "Contesting from behind."),
@@ -220,17 +214,24 @@ _MIXED  = "#f59e0b"
 _NEUT   = "#94a3b8"
 _FONT   = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
 
+# Dark theme matching scripts/plots.R's theme_lol -- used only by the gold-slider
+# figures (fig_gold_slider_heatmap / fig_gold_slider_stackedbar), which are meant
+# to sit visually alongside the R-rendered charts, not the rest of this
+# (light-themed) dashboard.
+_DARK_BG   = "#222327"
+_DARK_INK  = "#e2e8f0"
+_DARK_SUB  = "#94a3b8"
+_DARK_GRID = "#334155"
+_DARK_PANEL = "#1e293b"
+# theme_lol renders with base_family="sans", which resolves to Arial on this
+# machine (via ragg) -- match that instead of the dashboard's Inter stack.
+_DARK_FONT = "Arial, Helvetica, sans-serif"
+
+# Kept visually in sync with scripts/plots.R's pal_outcome.
 _OUTCOME_COLORS = {
-    "clean_take":               "#10b981",  # emerald
-    "clean_give":               "#06b6d4",  # cyan
-    "good_trade":               "#84cc16",  # lime
-    "coinflip":                 "#a78bfa",  # violet
-    "bad_contest":              "#ef4444",  # red
-    "won_fight_lost_objective": "#f97316",  # orange
-    "throw_setup":              "#e11d48",  # rose
-    "lost_fight_got_objective": "#f59e0b",  # amber
-    "objective_steal":          "#7c3aed",  # purple
-    "no_meaningful_contest":    "#64748b",  # slate
+    "take":            "#2e8b57",  # green
+    "lost_with_trade": "#e8743b",  # orange
+    "lost":            "#c0392b",  # red
 }
 
 _PROFILE_COLORS = {
@@ -287,13 +288,47 @@ for _prof in PROFILE_ORDER:
         len(_sub),
     ))
 
-# ── pre-compute setup → outcome Sankey edge counts ────────────────────────────
-_sankey_counts = (
-    df.groupby(["setup_profile", "outcome_label"])
-    .size()
-    .reset_index(name="n")
-)
-_sankey_counts = _sankey_counts[_sankey_counts["n"] >= 3].copy()
+# ── pre-compute rolling gold-window slider frames ────────────────────────────
+# Fine-stepped slider (every _SLIDER_STEP pp) where each step re-aggregates a
+# rolling window of rows centered on that gold_pct_T_60 value, rather than a
+# hard bucket. This is what gives the slider a continuous "scrub" feel while
+# keeping enough sample size per frame (window widens automatically if thin).
+_SLIDER_STEP     = 2.0    # pp between adjacent slider steps
+_SLIDER_HALF_WIN = 5.0    # rolling half-window width (pp) around each center
+_SLIDER_MIN_N    = 150    # widen the window until at least this many rows
+_SLIDER_MAX_HALF = 20.0
+
+_PROFILES_PRESENT = [p for p in PROFILE_ORDER if p in df["setup_profile"].unique()]
+_OUTCOMES_PRESENT = [o for o in OUTCOME_ORDER if o in df["outcome_label"].unique()]
+
+_slider_lo = float(np.ceil(df_sf["gold_pct_T_60"].quantile(0.02) / _SLIDER_STEP) * _SLIDER_STEP)
+_slider_hi = float(np.floor(df_sf["gold_pct_T_60"].quantile(0.98) / _SLIDER_STEP) * _SLIDER_STEP)
+_slider_centers = np.arange(_slider_lo, _slider_hi + _SLIDER_STEP / 2, _SLIDER_STEP)
+
+
+def _gold_window_pct(center: float) -> tuple[pd.DataFrame, pd.DataFrame, int, float]:
+    """Row-normalized setup_profile x outcome_label % table for a rolling gold window."""
+    half = _SLIDER_HALF_WIN
+    while True:
+        sub = df_sf[(df_sf["gold_pct_T_60"] >= center - half) & (df_sf["gold_pct_T_60"] <= center + half)]
+        if len(sub) >= _SLIDER_MIN_N or half >= _SLIDER_MAX_HALF:
+            break
+        half += 2.5
+    ct = pd.crosstab(sub["setup_profile"], sub["outcome_label"])
+    ct = ct.reindex(index=_PROFILES_PRESENT, columns=_OUTCOMES_PRESENT, fill_value=0)
+    row_n = ct.sum(axis=1)
+    pct = (ct.div(row_n.replace(0, np.nan), axis=0) * 100).fillna(0)
+    return pct, ct, len(sub), half
+
+
+_GOLD_SLIDER_FRAMES: list[dict] = []
+for _c in _slider_centers:
+    _pct, _ct, _n, _half = _gold_window_pct(float(_c))
+    _GOLD_SLIDER_FRAMES.append({"center": float(_c), "pct": _pct, "ct": _ct, "n": _n, "half": _half})
+
+# Default slider position: the frame centered closest to 0% (even gold), not an
+# extreme end -- users should land on a neutral view and drag from there.
+_GOLD_SLIDER_DEFAULT_IDX = int(np.argmin([abs(f["center"]) for f in _GOLD_SLIDER_FRAMES]))
 
 # ── per-objective pie data ─────────────────────────────────────────────────────
 # Voidgrubs: use ordinal 1 (first grub) as representative for camp 1,
@@ -670,53 +705,232 @@ def fig_gold_breakeven() -> go.Figure:
     )
 
 
-def fig_setup_outcome_sankey() -> go.Figure:
-    """Sankey: setup profile → outcome label."""
-    p_setups   = [p for p in PROFILE_ORDER if p in _sankey_counts["setup_profile"].unique()]
-    p_outcomes = [o for o in OUTCOME_ORDER  if o in _sankey_counts["outcome_label"].unique()]
-    all_labels = p_setups + p_outcomes
-    node_idx   = {l: i for i, l in enumerate(all_labels)}
+def _slider_steps(frames_data: list[dict]) -> list[dict]:
+    """go.layout.slider steps that animate to each precomputed gold-window frame."""
+    return [
+        dict(
+            method="animate",
+            label="0" if f["center"] == 0 else f"{f['center']:+.0f}",
+            args=[[f"_frame_{i}"], dict(mode="immediate",
+                  frame=dict(duration=0, redraw=True), transition=dict(duration=150))],
+        )
+        for i, f in enumerate(frames_data)
+    ]
 
-    def _rgba(hex_c: str, a: float = 0.28) -> str:
-        h = hex_c.lstrip("#")
-        return f"rgba({int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)},{a})"
 
-    node_colors = (
-        [_rgba(_PROFILE_COLORS.get(p, _NEUT), 1.0) for p in p_setups]
-        + [_rgba(_OUTCOME_COLORS.get(o, _NEUT), 1.0) for o in p_outcomes]
+def _frame_annotation(f: dict, color: str = "#64748b", family: str = _FONT, y: float = 1.09) -> dict:
+    return dict(
+        text=f"n = {f['n']:,} objective windows  ·  ±{f['half']:.1f}pp rolling window",
+        xref="paper", yref="paper", x=0.5, y=y, xanchor="center", yanchor="bottom",
+        showarrow=False, font=dict(size=11, color=color, family=family),
     )
-    src, tgt, val, lc = [], [], [], []
-    for _, row in _sankey_counts.iterrows():
-        sp, ol, n = row["setup_profile"], row["outcome_label"], int(row["n"])
-        if sp in node_idx and ol in node_idx:
-            src.append(node_idx[sp])
-            tgt.append(node_idx[ol])
-            val.append(n)
-            lc.append(_rgba(_PROFILE_COLORS.get(sp, _NEUT)))
 
-    fig = go.Figure(go.Sankey(
-        arrangement="snap",
-        node=dict(
-            pad=14, thickness=30,
-            label=[l.replace("_", " ") for l in all_labels],
-            color=node_colors,
-            line=dict(color="rgba(0,0,0,0)", width=0),
-            hovertemplate="%{label}<br>Total: %{value:,}<extra></extra>",
-        ),
-        link=dict(
-            source=src, target=tgt, value=val, color=lc,
-            hovertemplate="%{source.label} → %{target.label}<br>Count: %{value:,}<extra></extra>",
-        ),
-    ))
+
+def _heatmap_cell_alpha(pct: pd.DataFrame) -> pd.DataFrame:
+    """Same opacity rule as scripts/plots.R's static heatmap: 0.06 for empty cells,
+    else rescaled 0.13-1.0 across this frame's own positive values.
+
+    Returns a DataFrame aligned to pct's own index/columns (not a flat array),
+    so lookups are done by (profile, outcome) label rather than by position --
+    a flat-array + positional-counter approach previously got the fill order
+    out of sync with the (outcome-major) loop order after the axes were
+    swapped, silently applying each cell's opacity to the wrong cell.
+    """
+    flat = pct.values.flatten()
+    positive = flat[flat > 0]
+    if len(positive) == 0:
+        alpha_flat = np.full_like(flat, 0.06)
+    else:
+        lo, hi = float(positive.min()), float(positive.max())
+        span = max(hi - lo, 1.0)
+        alpha_flat = np.where(flat == 0, 0.06, 0.13 + 0.87 * (flat - lo) / span)
+    return pd.DataFrame(alpha_flat.reshape(pct.shape), index=pct.index, columns=pct.columns)
+
+
+def _dim_color(hex_color: str, factor: float) -> str:
+    """Scale a hex color's HSV value by `factor` (0-1) to encode magnitude.
+
+    Used instead of Plotly's shape opacity for the gold-slider heatmap: opacity
+    alpha-blends against the actual page background, which (with the previous
+    saturated-navy BG) washed warm hues toward muddy brown. Dimming in HSV value instead of
+    alpha-blending avoids that, but for hues in the orange/amber range there's
+    a second, unavoidable effect on top: dark + desaturated red-orange is what
+    people perceptually call "brown" -- it's not a rendering artifact, it's a
+    real category boundary. So for that hue range specifically, nudge hue
+    toward true orange/amber and boost saturation as it dims, and keep a
+    modest brightness floor so the darkest cells don't get so dark that hue
+    stops reading at all. Green/red aren't in that hue range and are
+    untouched (pure value-scaling looked fine for those already).
+    """
+    r, g, b = (int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    if 0.02 <= h <= 0.14:
+        dim = 1 - factor
+        h = min(h + 0.035 * dim, 0.11)
+        s = min(1.0, s + 0.30 * dim)
+        v = v * (0.24 + 0.76 * factor)
+    else:
+        v = v * factor
+    r2, g2, b2 = colorsys.hsv_to_rgb(h, s, v)
+    return f"#{round(r2 * 255):02x}{round(g2 * 255):02x}{round(b2 * 255):02x}"
+
+
+def _heatmap_layer(pct: pd.DataFrame, ct: pd.DataFrame):
+    """Per-frame (shapes, xs, ys, texts, textcolors, hovertexts) for the gold-slider heatmap.
+
+    x = setup profile, y = outcome. Built from layout shapes + a text/hover
+    scatter trace rather than a native Heatmap trace, because a Heatmap can
+    only carry one continuous colorscale -- it can't do "hue = outcome
+    category, opacity = prevalence" the way scripts/plots.R's static p3
+    heatmap does. Shapes give literal per-cell fillcolor (solid, HSV-dimmed by
+    prevalence -- see _dim_color) matching that design's intent without the
+    hue-muddying that plain shape opacity causes against a colored background.
+    """
+    alpha = _heatmap_cell_alpha(pct)
+    shapes, xs, ys, texts, colors, hovers = [], [], [], [], [], []
+    for i, out in enumerate(_OUTCOMES_PRESENT):
+        for j, prof in enumerate(_PROFILES_PRESENT):
+            p = float(pct.loc[prof, out])
+            a = float(alpha.loc[prof, out])
+            n = int(ct.loc[prof, out])
+            shapes.append(dict(
+                type="rect", xref="x", yref="y",
+                x0=j - 0.5, x1=j + 0.5, y0=i - 0.5, y1=i + 0.5,
+                fillcolor=_dim_color(_OUTCOME_COLORS.get(out, _NEUT), a), opacity=1.0,
+                line=dict(color=_DARK_BG, width=1.5), layer="below",
+            ))
+            xs.append(j); ys.append(i)
+            texts.append(f"{p:.0f}%")
+            colors.append("white" if p > 0 else "#3d5470")
+            hovers.append(f"<b>{prof.replace('_', ' ')}</b><br>{out.replace('_', ' ')}: "
+                          f"{p:.1f}%  (n={n:,})<extra></extra>")
+    return shapes, xs, ys, texts, colors, hovers
+
+
+def fig_gold_slider_heatmap() -> go.Figure:
+    """Setup profile x outcome heatmap, scrubbable across gold % advantage at T-60.
+
+    Dark theme_lol style: categorical color by outcome, opacity by prevalence
+    within profile -- matches scripts/plots.R's static p3 heatmap design.
+
+    Left = team strongly ahead on gold, right = team strongly behind (matches the
+    "left is strong yours, right is strong theirs" framing on the slider labels).
+    """
+    # Initial trace/active both point at the gold=0% frame -- the slider position
+    # on first paint is only reliable when the initial `data` and
+    # `sliders[0].active` refer to the same frame.
+    frames_data = _GOLD_SLIDER_FRAMES
+    default_idx = _GOLD_SLIDER_DEFAULT_IDX
+    n_rows, n_cols = len(_OUTCOMES_PRESENT), len(_PROFILES_PRESENT)
+    x_lbl = [p.replace("_", " ") for p in _PROFILES_PRESENT]
+    y_lbl = [o.replace("_", " ") for o in _OUTCOMES_PRESENT]
+
+    layers = [_heatmap_layer(f["pct"], f["ct"]) for f in frames_data]
+    shapes0, xs0, ys0, texts0, colors0, hovers0 = layers[default_idx]
+
+    fig = go.Figure(
+        data=[go.Scatter(
+            x=xs0, y=ys0, mode="text", text=texts0,
+            textfont=dict(color=colors0, size=12, family=_DARK_FONT),
+            hovertemplate=hovers0, showlegend=False,
+        )],
+        frames=[
+            go.Frame(
+                data=[go.Scatter(text=layer[3], textfont=dict(color=layer[4]),
+                                  hovertemplate=layer[5])],
+                name=f"_frame_{i}",
+                layout=go.Layout(shapes=layer[0],
+                                  annotations=[_frame_annotation(f, color=_DARK_SUB, family=_DARK_FONT, y=1.06)]),
+            )
+            for i, (f, layer) in enumerate(zip(frames_data, layers))
+        ],
+    )
     fig.update_layout(
-        paper_bgcolor="white",
-        font=dict(family=_FONT, size=11, color="#1e293b"),
+        shapes=shapes0,
+        paper_bgcolor=_DARK_BG, plot_bgcolor=_DARK_BG,
+        font=dict(family=_DARK_FONT, size=12, color=_DARK_INK),
+        hoverlabel=dict(bgcolor=_DARK_PANEL, font_size=13, font_family=_DARK_FONT, font_color=_DARK_INK),
         title=dict(
-            text="Setup profile → outcome label",
-            font=dict(size=14, color="#1e293b"),
+            text="<b>Outcome mix by setup profile, across gold advantage</b>",
+            font=dict(size=21, color=_DARK_INK, family=_DARK_FONT),
+            subtitle=dict(text="Color = outcome type  ·  Opacity = prevalence within profile",
+                         font=dict(size=14, color=_DARK_SUB, family=_DARK_FONT)),
         ),
-        height=500,
-        margin=dict(l=10, r=10, t=44, b=10),
-        hoverlabel=dict(bgcolor="white", font_size=13, font_family=_FONT),
+        height=560,
+        xaxis=dict(tickvals=list(range(n_cols)), ticktext=x_lbl, tickangle=-20,
+                   range=[-0.5, n_cols - 0.5], showgrid=False, zeroline=False, color=_DARK_SUB),
+        yaxis=dict(tickvals=list(range(n_rows)), ticktext=y_lbl,
+                   range=[-0.5, n_rows - 0.5], autorange="reversed",
+                   showgrid=False, zeroline=False, color=_DARK_SUB),
+        annotations=[_frame_annotation(frames_data[default_idx], color=_DARK_SUB, family=_DARK_FONT, y=1.06)],
+        margin=dict(l=4, r=20, t=110, b=140),
+        sliders=[dict(
+            active=default_idx, x=0.02, len=0.96, y=-0.14, pad=dict(t=20, b=10),
+            currentvalue=dict(prefix="Gold advantage at T-60 (you → them): ", suffix="%",
+                              font=dict(size=13, color=_DARK_INK)),
+            font=dict(size=10, color=_DARK_SUB),
+            bgcolor=_DARK_PANEL, bordercolor=_DARK_GRID, activebgcolor=_ACCENT,
+            steps=_slider_steps(frames_data),
+        )],
+    )
+    return fig
+
+
+def fig_gold_slider_stackedbar() -> go.Figure:
+    """100%-stacked bar version of fig_gold_slider_heatmap: setup profile x outcome mix."""
+    # Initial trace/active both point at the gold=0% frame — see
+    # fig_gold_slider_heatmap for why active must match the initial data's frame.
+    frames_data = _GOLD_SLIDER_FRAMES
+    default_idx = _GOLD_SLIDER_DEFAULT_IDX
+    x_lbl = [p.replace("_", " ") for p in _PROFILES_PRESENT]
+
+    def _bars(pct: pd.DataFrame):
+        return [
+            go.Bar(
+                name=o.replace("_", " "), x=x_lbl, y=pct[o].values,
+                marker=dict(color=_OUTCOME_COLORS.get(o, _NEUT), line=dict(width=0)),
+                hovertemplate="<b>%{x}</b><br>" + o.replace("_", " ") + ": %{y:.1f}%<extra></extra>",
+            )
+            for o in _OUTCOMES_PRESENT
+        ]
+
+    fig = go.Figure(
+        data=_bars(frames_data[default_idx]["pct"]),
+        frames=[
+            go.Frame(
+                data=_bars(f["pct"]), name=f"_frame_{i}",
+                layout=go.Layout(annotations=[_frame_annotation(f, color=_DARK_SUB, family=_DARK_FONT, y=1.04)]),
+            )
+            for i, f in enumerate(frames_data)
+        ],
+    )
+    fig.update_layout(
+        barmode="stack",
+        paper_bgcolor=_DARK_BG, plot_bgcolor=_DARK_BG,
+        font=dict(family=_DARK_FONT, size=12, color=_DARK_INK),
+        hoverlabel=dict(bgcolor=_DARK_PANEL, font_size=13, font_family=_DARK_FONT, font_color=_DARK_INK),
+        title=dict(
+            text="<b>Outcome mix by setup profile, across gold advantage (stacked)</b>",
+            font=dict(size=21, color=_DARK_INK, family=_DARK_FONT),
+            subtitle=dict(text="Color = outcome type  ·  Height = share within profile",
+                         font=dict(size=14, color=_DARK_SUB, family=_DARK_FONT)),
+        ),
+        height=640,
+        xaxis=dict(tickangle=-15, showgrid=False, zeroline=False, color=_DARK_SUB),
+        yaxis=dict(showgrid=True, gridcolor=_DARK_GRID, zeroline=False, color=_DARK_SUB,
+                   title=dict(text="% of rows", font=dict(color=_DARK_SUB)), range=[0, 100]),
+        showlegend=True,
+        legend=dict(orientation="h", y=-0.55, x=0.5, xanchor="center",
+                    font=dict(size=10, color=_DARK_SUB), bgcolor="rgba(0,0,0,0)"),
+        margin=dict(l=4, r=20, t=145, b=220),
+        annotations=[_frame_annotation(frames_data[default_idx], color=_DARK_SUB, family=_DARK_FONT, y=1.04)],
+        sliders=[dict(
+            active=default_idx, x=0.02, len=0.96, y=-0.24, pad=dict(t=20, b=10),
+            currentvalue=dict(prefix="Gold advantage at T-60 (you → them): ", suffix="%",
+                              font=dict(size=13, color=_DARK_INK)),
+            font=dict(size=10, color=_DARK_SUB),
+            bgcolor=_DARK_PANEL, bordercolor=_DARK_GRID, activebgcolor=_ACCENT,
+            steps=_slider_steps(frames_data),
+        )],
     )
     return fig

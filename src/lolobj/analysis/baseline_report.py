@@ -5,8 +5,8 @@ covering:
 
   1. Outcome label frequencies (overall and by rank bucket)
   2. Rule-based setup profile frequencies (overall and by rank bucket)
-  3. Bad-contest rate — how often teams contest from poor states
-  4. Give-and-trade success rate
+  3. Loss rate when present — how often teams that showed up still lost clean
+  4. Trade-on-loss rate — how often a loss still nets meaningful value elsewhere
   5. Key auto-generated observations
 
 Usage:
@@ -24,12 +24,7 @@ from typing import Any
 
 # ------------------------------------------------------------------ constants
 
-OUTCOME_ORDER = [
-    "clean_take", "clean_give", "good_trade",
-    "coinflip",
-    "bad_contest", "won_fight_lost_objective", "lost_fight_got_objective",
-    "throw_setup", "objective_steal", "no_meaningful_contest",
-]
+OUTCOME_ORDER = ["take", "lost_with_trade", "lost"]
 
 RANK_ORDER = ["low", "mid", "high", "elite", "unknown"]
 
@@ -182,48 +177,49 @@ def section_setup_profiles(df: Any, by_rank: bool = True) -> None:
     return df  # caller can use the annotated df
 
 
-def section_bad_contest_rate(df: Any) -> None:
+def section_loss_rate(df: Any) -> None:
     print("\n" + "=" * 60)
-    print("SECTION 3: Bad Contest Rate")
+    print("SECTION 3: Loss Rate When Present")
     print("=" * 60)
-    print("  Definition: teams that contested (team_nearby_T_30 >= 1) but got")
-    print("  outcome_label == 'bad_contest'.\n")
+    print("  Definition: teams that showed up (team_nearby_T_30 >= 1) but still")
+    print("  lost the objective with nothing to show for it (outcome_label == 'lost').\n")
 
-    contested = df[df["team_nearby_T_30"] >= 1]
-    bad = contested[contested["outcome_label"] == "bad_contest"]
+    present = df[df["team_nearby_T_30"] >= 1]
+    bad = present[present["outcome_label"] == "lost"]
 
-    print(f"  Contested rows   : {len(contested)}")
-    print(f"  Bad contests     : {len(bad)}  ({_pct(len(bad), len(contested))})")
+    print(f"  Present rows     : {len(present)}")
+    print(f"  Bad losses       : {len(bad)}  ({_pct(len(bad), len(present))})")
 
     ranks_present = [r for r in RANK_ORDER if r in df["rank_bucket"].values]
     if len(ranks_present) >= 2:
         print()
         rows = []
         for rank in ranks_present:
-            c = contested[contested["rank_bucket"] == rank]
-            b = c[c["outcome_label"] == "bad_contest"]
+            c = present[present["rank_bucket"] == rank]
+            b = c[c["outcome_label"] == "lost"]
             rows.append((rank, len(c), len(b), _pct(len(b), len(c))))
         _print_table(
             "By rank bucket",
-            ["rank_bucket", "contested", "bad_contests", "rate"],
+            ["rank_bucket", "present", "bad_losses", "rate"],
             rows,
             col_widths=[12, 12, 14, 8],
         )
 
 
-def section_give_and_trade(df: Any) -> None:
+def section_trade_on_loss(df: Any) -> None:
     print("\n" + "=" * 60)
-    print("SECTION 4: Give-and-Trade Success Rate")
+    print("SECTION 4: Trade Rate When Losing the Objective")
     print("=" * 60)
-    print("  'Give' rows: outcome_label in {clean_give, good_trade}.\n")
+    print("  Of rows where the team lost the objective, how often did they still")
+    print("  gain meaningful value elsewhere (outcome_label == 'lost_with_trade')?\n")
 
     total = len(df)
-    gives = df[df["outcome_label"].isin(["clean_give", "good_trade"])]
-    good_trades = df[df["outcome_label"] == "good_trade"]
+    losses = df[df["outcome_label"].isin(["lost", "lost_with_trade"])]
+    traded = df[df["outcome_label"] == "lost_with_trade"]
 
     print(f"  All rows          : {total}")
-    print(f"  Gives (any)       : {len(gives)}  ({_pct(len(gives), total)})")
-    print(f"  Good trades       : {len(good_trades)}  ({_pct(len(good_trades), total)})")
+    print(f"  Losses (any)      : {len(losses)}  ({_pct(len(losses), total)})")
+    print(f"  Losses w/ trade   : {len(traded)}  ({_pct(len(traded), len(losses))} of losses)")
 
     ranks_present = [r for r in RANK_ORDER if r in df["rank_bucket"].values]
     if len(ranks_present) >= 2:
@@ -231,11 +227,12 @@ def section_give_and_trade(df: Any) -> None:
         rows = []
         for rank in ranks_present:
             sub = df[df["rank_bucket"] == rank]
-            g = sub[sub["outcome_label"].isin(["clean_give", "good_trade"])]
-            rows.append((rank, len(sub), len(g), _pct(len(g), len(sub))))
+            l = sub[sub["outcome_label"].isin(["lost", "lost_with_trade"])]
+            t = sub[sub["outcome_label"] == "lost_with_trade"]
+            rows.append((rank, len(l), len(t), _pct(len(t), len(l))))
         _print_table(
-            "Give rate by rank",
-            ["rank_bucket", "total", "gives", "give_rate"],
+            "Trade-on-loss rate by rank",
+            ["rank_bucket", "losses", "traded", "trade_rate"],
             rows,
             col_widths=[12, 8, 8, 12],
         )
@@ -286,9 +283,11 @@ def section_observations(df: Any) -> None:
         f" vs 1+ deaths: {100*one_plus:.1f}%."
     )
 
-    # Throw setup rate (outcome label)
-    throw_pct = 100 * (df["outcome_label"] == "throw_setup").mean()
-    obs.append(f"Throw-setup label occurs in {throw_pct:.1f}% of rows.")
+    # Trade-on-loss rate (outcome label): of the rows the team lost, how many
+    # still gained meaningful value elsewhere.
+    losses = df[df["outcome_label"].isin(["lost", "lost_with_trade"])]
+    trade_pct = 100 * (losses["outcome_label"] == "lost_with_trade").mean()
+    obs.append(f"Of rows where the team lost the objective, {trade_pct:.1f}% still traded for value elsewhere.")
 
     print()
     for i, o in enumerate(obs, 1):
@@ -316,8 +315,8 @@ def run_report(parquet_path: Path) -> None:
 
     section_outcome_frequencies(df)
     section_setup_profiles(df)
-    section_bad_contest_rate(df)
-    section_give_and_trade(df)
+    section_loss_rate(df)
+    section_trade_on_loss(df)
     section_observations(df)
 
     print("\n" + "=" * 60)

@@ -247,6 +247,7 @@ class ObjectiveWindowRow:
     objective_result: str = ""   # secured | lost
     good_trade: int = 0          # 1 if meaningful trade after giving objective
     steal: int = 0               # 1 if secured while absent or outnumbered
+    got_stolen: int = 0          # 1 if lost while present with numbers advantage
     net_value: int = 0
 
     extra: dict[str, Any] = field(default_factory=dict)
@@ -504,6 +505,7 @@ def _build_one_row(
     row.objective_result = outcome["objective_result"]
     row.good_trade = int(outcome["good_trade"])
     row.steal = int(outcome["steal"])
+    row.got_stolen = int(outcome["got_stolen"])
     row.net_value = score_objective(
         ev, team_id, timeline, meta, tracks
     )

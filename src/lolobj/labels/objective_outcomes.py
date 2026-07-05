@@ -12,6 +12,10 @@ Returns four orthogonal fields (from team_id's perspective):
     steal           - True if team secured the objective while absent at T-30
                       (team_nearby == 0) or clearly outnumbered
                       (enemy_nearby >= team_nearby + 2).
+    got_stolen      - True if the enemy secured the objective (mirrors steal's use of
+                      secured) while this team was present (team_nearby >= 1) and the
+                      enemy was absent (enemy_nearby == 0) OR this team clearly
+                      outnumbered the enemy (team_nearby >= enemy_nearby + 2).
 
 Uses only events up to T+120 (no leakage beyond the aftermath window).
 """
@@ -56,6 +60,7 @@ def classify_outcome(
     enemy_pids = _team_pids(meta_team_ids, enemy_team)
 
     secured = ev.killer_team_id == team_id
+    enemy_secured = ev.killer_team_id == enemy_team
 
     t_minus_30 = max(0, T - 30_000)
     team_nearby = sf.nearby_champion_count(tracks, team_pids, obj_pos, t_minus_30)
@@ -90,10 +95,67 @@ def classify_outcome(
         (team_nearby == 0 and enemy_nearby >= 1)  # absent but enemy was present
         or enemy_nearby >= team_nearby + 2         # dramatically outnumbered
     )
+    got_stolen = (
+        enemy_secured                          # mirrors steal's use of secured
+        and team_nearby >= 1
+        and (
+            enemy_nearby == 0                  # enemy absent but still secured it
+            or team_nearby >= enemy_nearby + 2  # team had clear local numbers
+        )
+    )
 
     return {
         "fight_result": fight_result,
         "objective_result": objective_result,
         "good_trade": good_trade,
         "steal": steal,
+        "got_stolen": got_stolen,
     }
+
+
+# ---------------------------------------------------------------------------
+# outcome_label: DataFrame-level derivation of a single readable label from
+# the orthogonal fields above. This is the canonical taxonomy — kept in sync
+# with scripts/plots.R's inline case_when block, which computes the same
+# thing for the R figures. If you change one, change the other.
+#
+# Deliberately just 3 categories. Earlier iterations also split out
+# steal / got_stolen_from and contested / uncontested, but both turned out
+# to be noise: steal/got_stolen fire whenever the enemy (or team) wasn't
+# nearby at T-30, which is already exactly the setup_profile definition for
+# free_setup/gave_away — so a team in "free setup" that gets caught and beaten
+# by a late-arriving enemy shows up as a dramatic "steal", even though nothing
+# about it was a steal. And contested vs uncontested is ~100% determined by
+# setup_profile already (clean_contest/disadvantaged are always "contested",
+# free_setup/no_early_setup are always not), so it added a column that just
+# restated the row. What's left — secured vs lost, and whether the losing
+# side still got value elsewhere — is the part that isn't already implied by
+# setup_profile.
+# ---------------------------------------------------------------------------
+
+OUTCOME_LABEL_ORDER = ["take", "lost_with_trade", "lost"]
+
+
+def assign_outcome_labels(df):
+    """Return a Series of outcome_label values derived from objective_result
+    and good_trade.
+
+        take            - team secured the objective. (Not called "clean_take" --
+                          not all takes are clean; this includes contested takes
+                          too. See setup_profile for whether it was contested.)
+        lost_with_trade - team lost the objective but gained meaningful value
+                          elsewhere in the aftermath (good_trade == 1).
+        lost            - team lost the objective and got nothing for it.
+    """
+    import numpy as np
+    import pandas as pd
+
+    secured = df["objective_result"] == "secured"
+    lost = df["objective_result"] == "lost"
+    good_trade = df["good_trade"].astype(bool)
+
+    conditions = [secured, lost & good_trade, lost & ~good_trade]
+    choices = ["take", "lost_with_trade", "lost"]
+    return pd.Series(
+        np.select(conditions, choices, default=pd.NA), index=df.index, name="outcome_label"
+    )

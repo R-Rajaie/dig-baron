@@ -22,7 +22,7 @@ FIG  <- file.path(ROOT, "remake", "figures")
 dir.create(FIG, showWarnings = FALSE, recursive = TRUE)
 
 # ----- look & feel ----------------------------------------------------
-BG   <- "#0f172a"
+BG   <- "#222327"
 INK  <- "#e2e8f0"; SUB <- "#94a3b8"; GRID <- "#334155"
 theme_lol <- function(base = 16) {
   theme_minimal(base_size = base, base_family = "sans") +
@@ -57,25 +57,23 @@ fill_secure  <- function(...) scale_fill_gradientn (colours = RYG, limits = c(0,
                                                     name = "Secure %", ...)
 col_secure   <- function(...) scale_colour_gradientn(colours = RYG, limits = c(0,100),
                                                     name = "Secure %", ...)
-prof_levels <- c("free setup","free setup deaths","clean contest",
+prof_levels <- c("free setup","free setup w/deaths","clean contest",
                  "neither team setup","disadvantaged","no setup")
-pal_profile <- c("free setup"="#2e8b57","free setup deaths"="#86c06c",
+pal_profile <- c("free setup"="#2e8b57","free setup w/deaths"="#86c06c",
                  "clean contest"="#ccb14e","neither team setup"="#8c95a3",
                  "disadvantaged"="#e8743b","no setup"="#c0392b")
 pal_fight  <- c("won" = "#2e8b57", "draw" = "#64748b", "lost" = "#c0392b", "none" = "#334155")
 fight_levels <- c("won", "draw", "lost", "none")
-outcome_levels <- c(
-  "uncontested take","steal","contested take",
-  "gave, got trade","clean give",
-  "contested loss + trade","contested loss")
+# Just 3 categories: secured, lost, lost-but-traded. Earlier versions also
+# split out steal/got_stolen_from and contested/uncontested, but both were
+# noise -- steal/got_stolen just mirror the setup_profile definition (fires
+# whenever a team wasn't nearby at T-30, i.e. exactly free_setup/gave_away),
+# and contested/uncontested is ~100% determined by setup_profile already.
+outcome_levels <- c("take", "lost with trade", "lost")
 pal_outcome <- c(
-  "uncontested take"       = "#2e8b57",
-  "steal"                  = "#0891b2",
-  "contested take"         = "#22c55e",
-  "clean give"             = "#8c95a3",
-  "gave, got trade"        = "#7fb3d3",
-  "contested loss + trade" = "#e8743b",
-  "contested loss"         = "#c0392b"
+  "take"            = "#2e8b57",
+  "lost with trade" = "#e8743b",
+  "lost"            = "#c0392b"
 )
 pal_gold <- c("big behind"="#c0392b","behind"="#e8743b","even"="#9aa0a6",  # behind=red, ahead=green
               "ahead"="#5aa469","big ahead"="#2e8b57")
@@ -104,7 +102,7 @@ wilson <- function(k, n, z = 1.96) {           # returns pct lo/hi
 }
 
 # ----- load & derive --------------------------------------------------
-need <- c("secured","fight_result","objective_result","good_trade","steal","net_value",
+need <- c("secured","fight_result","objective_result","good_trade","net_value",
           "objective_time_ms","team_nearby_T_30","enemy_nearby_T_30","team_deaths_60s",
           "team_alive_T_30","enemy_alive_T_30","team_alive_T_60","enemy_alive_T_60",
           "arrived_first","support_alive_T_30","jungler_alive_T_30","gold_diff_T_60")
@@ -112,14 +110,14 @@ dat <- read_parquet(file.path(ROOT, "objective_windows.parquet"), col_select = a
   mutate(
     tp = team_nearby_T_30 >= 1, ep = enemy_nearby_T_30 >= 1,
     deaths = team_deaths_60s > 0,
-    alive_ge = (team_alive_T_30 - enemy_alive_T_30) >= 0,
+    nearby_ge = team_nearby_T_30 >= enemy_nearby_T_30,
     setup_profile = case_when(
-      tp & !ep & !deaths              ~ "free setup",
-      tp & !ep &  deaths              ~ "free setup deaths",
-      !tp &  ep                       ~ "no setup",
-      !tp & !ep                       ~ "neither team setup",
-      tp &  ep &  alive_ge & !deaths  ~ "clean contest",
-      TRUE                            ~ "disadvantaged"),
+      tp & !ep & !deaths               ~ "free setup",
+      tp & !ep &  deaths               ~ "free setup w/deaths",
+      !tp &  ep                        ~ "no setup",
+      !tp & !ep                        ~ "neither team setup",
+      tp &  ep & nearby_ge & !deaths   ~ "clean contest",
+      TRUE                             ~ "disadvantaged"),
     setup_profile = factor(setup_profile, levels = prof_levels),
     min  = objective_time_ms / 60000,
     gold_pct = gold_diff_T_60 / (2500 + 850 * min) * 100,
@@ -131,14 +129,10 @@ dat <- read_parquet(file.path(ROOT, "objective_windows.parquet"), col_select = a
     gold_state = factor(c("big_behind","behind","even","ahead","big_ahead")[ntile(gold_pct,5)],
                         levels = c("big_behind","behind","even","ahead","big_ahead")),
     outcome = factor(case_when(
-      steal == 1                                                               ~ "steal",
-      fight_result == "none" & objective_result == "secured"                   ~ "uncontested take",
-      fight_result == "none" & objective_result == "lost" & good_trade == 0    ~ "clean give",
-      fight_result == "none" & objective_result == "lost" & good_trade == 1    ~ "gave, got trade",
-      objective_result == "secured"                                             ~ "contested take",
-      objective_result == "lost"    & good_trade == 1                          ~ "contested loss + trade",
-      objective_result == "lost"    & good_trade == 0                          ~ "contested loss",
-      TRUE                                                                      ~ NA_character_),
+      objective_result == "secured"                     ~ "take",
+      objective_result == "lost" & good_trade == 1       ~ "lost with trade",
+      objective_result == "lost" & good_trade == 0       ~ "lost",
+      TRUE                                                ~ NA_character_),
       levels = outcome_levels))
 N <- nrow(dat)
 
@@ -148,10 +142,9 @@ N <- nrow(dat)
 s1 <- dat |> group_by(setup_profile) |>
   summarise(n = n(), secure = 100*mean(secured), net = mean(net_value), .groups = "drop") |>
   mutate(prevalence = 100*n/sum(n))
-s1_ord <- s1 |> arrange(desc(prevalence)) |>
+s1_ord <- s1 |> arrange(prevalence) |>
   mutate(setup_profile = factor(as.character(setup_profile), levels = as.character(setup_profile)))
-p1a <- ggplot(s1_ord, aes(prevalence, fct_reorder(as.character(setup_profile), prevalence),
-                          fill = setup_profile)) +
+p1a <- ggplot(s1_ord, aes(prevalence, setup_profile, fill = setup_profile)) +
   geom_col(width = 0.72) +
   geom_text(aes(label = sprintf("%.0f%%", prevalence)), hjust = -0.2, size = 3.6, colour = INK) +
   scale_fill_manual(values = pal_profile, guide = "none") +
@@ -161,7 +154,7 @@ p1a <- ggplot(s1_ord, aes(prevalence, fct_reorder(as.character(setup_profile), p
        subtitle = "Share of all objective contests") +
   theme_lol() + theme(panel.grid.major.y = element_blank(), axis.title.y = element_blank(),
                       axis.title.x = element_blank())
-p1b <- ggplot(s1, aes(secure, fct_reorder(as.character(setup_profile), secure), fill = setup_profile)) +
+p1b <- ggplot(s1_ord, aes(secure, setup_profile, fill = setup_profile)) +
   geom_col(width = 0.72) +
   geom_text(aes(label = sprintf("%.0f%%", secure)), hjust = -0.2, size = 3.6, colour = INK) +
   scale_fill_manual(values = pal_profile, guide = "none") +
@@ -169,23 +162,12 @@ p1b <- ggplot(s1, aes(secure, fct_reorder(as.character(setup_profile), secure), 
                      expand = expansion(mult = c(0, .10))) +
   labs(title = "Secure rate by setup profile",
        subtitle = "How often each setup ends with the team securing the objective",
-       caption = CAP) +
+       x = "Secure rate", caption = CAP) +
   theme_lol() + theme(panel.grid.major.y = element_blank(), axis.title.y = element_blank(),
                       plot.title = element_text(face = "bold", colour = INK, size = rel(1.08)))
-p1c <- ggplot(s1, aes(prevalence, secure, colour = setup_profile, label = as.character(setup_profile))) +
-  geom_point(size = 5) +
-  geom_text_repel(size = 3.4, colour = INK, fontface = "bold",
-                  box.padding = 0.5, max.overlaps = 20) +
-  scale_colour_manual(values = pal_profile, guide = "none") +
-  scale_x_continuous(labels = label_percent(scale = 1), limits = c(0, 35)) +
-  scale_y_continuous(labels = label_percent(scale = 1), limits = c(0, 100)) +
-  labs(title = "Prevalence vs secure rate",
-       subtitle = "Each dot = one setup profile",
-       x = "Prevalence (%)", y = "Secure rate (%)") +
-  theme_lol()
-p1 <- (p1a + p1b + p1c + plot_layout(widths = c(1, 1, 1))) &
+p1 <- (p1a + p1b + plot_layout(widths = c(1, 1))) &
   theme(plot.background = element_rect(fill = BG, colour = NA))
-savep(p1, "01_setup_profiles_combo.png", 22, 6.6)
+savep(p1, "01_setup_profiles_combo.png", 15, 6.6)
 
 # =====================================================================
 # 2 — Outcome label prevalence
@@ -207,7 +189,8 @@ p2 <- ggplot(s2, aes(prevalence, outcome, fill = outcome)) +
        subtitle = "Share of all objective contests",
        x = "Share", y = NULL) +
   theme_lol() +
-  theme(panel.grid.major.y = element_blank())
+  theme(panel.grid.major.y = element_blank(),
+        axis.title.x = element_text(hjust = 0.5))
 savep(p2, "02_outcome_labels_combo.png", 11, 7.0)
 
 # =====================================================================
@@ -215,24 +198,32 @@ savep(p2, "02_outcome_labels_combo.png", 11, 7.0)
 # =====================================================================
 setup_order <- dat |> group_by(setup_profile) |> summarise(pe = mean(net_value > 0)) |>
   arrange(desc(pe)) |> pull(setup_profile) |> as.character()
+setup_levels <- c("neither team setup", setdiff(rev(setup_order), "neither team setup"))
+
 s3 <- dat |>
   filter(!is.na(outcome)) |>
-  mutate(setup_profile = factor(as.character(setup_profile), levels = rev(setup_order))) |>
+  mutate(setup_profile = factor(as.character(setup_profile), levels = setup_levels)) |>
   group_by(setup_profile, outcome) |>
   summarise(n = n(), .groups = "drop_last") |>
   mutate(p = 100 * n / sum(n)) |>
   ungroup() |>
-  complete(setup_profile, outcome, fill = list(n = 0, p = 0))
-p3 <- ggplot(s3, aes(outcome, setup_profile, fill = outcome, alpha = p)) +
-  geom_tile(colour = "#0f172a", linewidth = 1.2) +
-  geom_text(aes(label = sprintf("%.0f%%", p)), size = 3.2, colour = "white", alpha = 1) +
+  complete(setup_profile, outcome, fill = list(n = 0, p = 0)) |>
+  mutate(
+    alpha_val = if_else(p == 0, 0.06,
+      0.13 + 0.87 * (p - min(p[p > 0], na.rm = TRUE)) /
+        pmax(max(p[p > 0], na.rm = TRUE) - min(p[p > 0], na.rm = TRUE), 1)))
+p3 <- ggplot(s3, aes(outcome, setup_profile, fill = outcome, alpha = alpha_val)) +
+  geom_tile(colour = BG, linewidth = 1.2) +
+  geom_text(data = \(d) filter(d, p  > 0),
+            aes(label = sprintf("%.0f%%", p)), size = 3.2, colour = "white", alpha = 1) +
+  geom_text(data = \(d) filter(d, p == 0),
+            aes(label = "0%"), size = 3.0, colour = "#3d5470", alpha = 1) +
   scale_fill_manual(values = pal_outcome, guide = "none") +
-  scale_alpha_continuous(range = c(0.12, 1), name = "Share of\nsetup's contests",
-                         labels = label_percent(scale = 1)) +
+  scale_alpha_identity(guide = "none") +
   scale_x_discrete(limits = outcome_levels) +
   coord_cartesian(expand = FALSE) +
   labs(title = "Where each setup ends up",
-       subtitle = "Color = outcome type  ·  Opacity = how often that setup produces it  ·  Value = share of setup's contests",
+       subtitle = "Color = outcome type  ·  Opacity = prevalence within setup",
        x = NULL, y = NULL) +
   theme_lol() +
   theme(axis.text.x  = element_text(angle = 32, hjust = 1, size = rel(0.82)),
@@ -249,10 +240,11 @@ s4 <- dat |> mutate(deaths = pmin(team_deaths_60s, 4)) |>
 ci4 <- wilson(s4$k, s4$n); s4$lo <- ci4$lo; s4$hi <- ci4$hi
 s4 <- s4 |> mutate(lab = c("0","1","2","3","4+")[deaths + 1])
 p4 <- ggplot(s4, aes(factor(deaths), secure)) +
-  geom_col(aes(fill = secure), width = 0.72) +
+  geom_col(aes(fill = deaths), width = 0.72) +
   geom_text(aes(label = sprintf("%.1f%%", secure)), vjust = -0.5, fontface = "bold",
             colour = INK, size = 4.4) +
-  fill_secure(guide = "none") +
+  scale_fill_gradientn(colours = c("#22c55e","#84cc16","#facc15","#f97316","#ef4444"),
+                       limits = c(0, 4), guide = "none") +
   scale_x_discrete(labels = s4$lab) +
   scale_y_continuous(labels = label_percent(scale = 1), limits = c(0, 100),
                      expand = expansion(c(0,.08))) +
@@ -294,7 +286,7 @@ p5 <- ggplot(s5, aes(y = feature)) +
   geom_text(aes(x = present, label = sprintf("%.0f%%", present)), vjust = -1.4,
             colour = "#60a5fa", size = 3.4, fontface = "bold") +
   geom_text(aes(x = (absent+present)/2,
-                label = sprintf("%+.0f pp", gap)), vjust = 2.0, size = 3.2, colour = INK) +
+                label = sprintf("%+.0f pp", gap)), vjust = 2.0, size = 2.7, colour = INK, alpha = 0.55) +
   annotate("point", x = 65, y = 7.05, colour = "#64748b", size = 4) +
   annotate("text",  x = 67, y = 7.05, label = "absent",  hjust = 0, size = 3.3, colour = "#94a3b8") +
   annotate("point", x = 80, y = 7.05, colour = "#60a5fa", size = 4) +
@@ -316,17 +308,51 @@ s6 <- dat |> filter(gold_pct >= -45, gold_pct <= 38) |>
   group_by(setup_profile, bin) |>
   summarise(x = mean(gold_pct), secure = 100*mean(secured), n = n(), .groups = "drop") |>
   filter(n >= 120)
+# 50% breakeven crossing per profile: found on the *actual plotted curve* --
+# the same loess fit (weight = n, span = 0.9) drawn by geom_smooth() below, on
+# the same binned data (s6) -- not a separate model. An earlier version fit a
+# plain logistic regression on the raw (unbinned) rows instead, which is a
+# different curve than what's drawn, so its 50% crossing didn't line up with
+# where the visible line actually crosses 50 (most visibly off at the -41%
+# mark, out in the sparse tail where the two models diverge most).
+be6 <- s6 |>
+  group_by(setup_profile) |>
+  group_modify(~{
+    d <- .x
+    if (nrow(d) < 5) return(tibble())
+    fit <- tryCatch(loess(secure ~ x, data = d, weights = n, span = 0.9), error = function(e) NULL)
+    if (is.null(fit)) return(tibble())
+    grid <- seq(min(d$x), max(d$x), length.out = 400)
+    pred <- tryCatch(as.numeric(predict(fit, newdata = data.frame(x = grid))),
+                      error = function(e) rep(NA_real_, length(grid)))
+    diff <- pred - 50
+    ok <- !is.na(diff)
+    grid <- grid[ok]; diff <- diff[ok]
+    if (length(diff) < 2) return(tibble())
+    idx <- which(diff[-length(diff)] * diff[-1] < 0)
+    if (length(idx) == 0) return(tibble())
+    i <- idx[1]
+    be <- grid[i] - diff[i] * (grid[i + 1] - grid[i]) / (diff[i + 1] - diff[i])
+    tibble(breakeven = be)
+  }) |>
+  ungroup()
+
 p6 <- ggplot(s6, aes(x, secure, colour = setup_profile)) +
   geom_hline(yintercept = 50, linetype = "22", colour = "#475569") +
   geom_vline(xintercept = 0, colour = GRID) +
   geom_point(aes(size = n), alpha = 0.22) +
   geom_smooth(aes(weight = n), method = "loess", se = FALSE, span = 0.9, linewidth = 1.35) +
+  geom_point(data = be6, aes(x = breakeven, y = 50), shape = 16, size = 3.4,
+             show.legend = FALSE) +
+  geom_label(data = be6, aes(x = breakeven, y = 50, label = sprintf("%+.0f%%", breakeven)),
+             fill = BG, size = 2.85, fontface = "bold", linewidth = 0,
+             vjust = -0.65, show.legend = FALSE) +
   scale_colour_manual(values = pal_profile, breaks = prof_levels, name = "Setup profile") +
   scale_size_area(max_size = 3.4, guide = "none") +
   scale_x_continuous(labels = label_percent(scale = 1)) +
   scale_y_continuous(labels = label_percent(scale = 1), limits = c(0, 100)) +
   labs(title = "A good setup is worth its weight in gold",
-       subtitle = "LOESS fits of P(secure) vs gold advantage at T-60, weighted by sample size.\nSetup sets the baseline; gold only slides you along it.",
+       subtitle = "Secure rate vs gold advantage at T-60, by setup profile  ·  ● = 50% breakeven crossing",
        x = "Gold advantage at T-60 (% of est. team gold)", y = "Secure rate", caption = CAP) +
   theme_lol() + theme(legend.position = "right")
 savep(p6, "06_gold_by_setup_lines.png", 10.5, 6.6)
@@ -428,12 +454,7 @@ effect_plot <- function(action, title, sub, style) {
 af <- dat$arrived_first == 1
 afT <- "How arriving first impacts secure rate by gamestate"
 afS <- "Lift in secure rate from arriving first, within each gold x numbers state"
-savep(effect_plot(af, afT, afS, "bars"),           "07a_effect_arrived_first_bars.png",          11, 6.0)
-
-na <- dat$team_nearby_T_30 > dat$enemy_nearby_T_30
-naT <- "How numbers advantage influences secure rates by gamestate"
-naS <- "Lift in secure rate from a T-30 numbers advantage, within each gold x numbers state"
-savep(effect_plot(na, naT, naS, "bars"),      "08a_effect_numbers_advantage_bars.png",      11, 6.0)
+savep(effect_plot(af, afT, afS, "bars"),           "07_effect_arrived_first_bars.png",          11, 6.0)
 
 # =====================================================================
 # 9 — SHAP beeswarm (RandomForest)   (from shap_compute.py output)

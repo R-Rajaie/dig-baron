@@ -185,7 +185,6 @@ CHARTS: list[tuple[str, object]] = [
     ("03_setup_profile_by_objective",   A.fig_objective_profile_pies()),
     ("04_outcome_label_by_objective",   A.fig_objective_outcome_pies()),
     ("05_gold_breakeven",               A.fig_gold_breakeven()),
-    ("06_setup_outcome_sankey",         A.fig_setup_outcome_sankey()),
     ("07_feature_impact",               A.fig_feature_impact()),
     ("08_deaths_before_objective",      A.fig_deaths_secure()),
     ("09_state_conditioned_arrive_first",

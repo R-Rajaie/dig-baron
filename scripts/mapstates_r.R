@@ -28,7 +28,7 @@ suppressPackageStartupMessages({
 
 ROOT     <- "C:/Users/Laser/dig-baron"
 MAP_PATH <- file.path(ROOT, "data/raw/rift map.png")
-OUT_PATH <- file.path(ROOT, "exports/charts/17e_mapstates_ggplot2_dark.png")
+OUT_PATH <- file.path(ROOT, "data/processed/remake/figures/17_setup_profile_mapstates.png")
 
 # ── load and prepare map image ────────────────────────────────────────────────
 # readPNG gives (row, col, channel) with row=1 at TOP; ggplot y=0 at BOTTOM.
@@ -58,6 +58,13 @@ R_TOP_LANE <- c(0.175, gg(0.192))
 
 DRAGON_X <- 0.666;  DRAGON_Y <- gg(0.703)
 
+# Detection radius circle — 2500 game units on a ~14870-unit map
+.theta       <- seq(0, 2 * pi, length.out = 200)
+NEARBY_CIRCLE <- data.frame(
+  x = DRAGON_X + (2500 / 14870) * cos(.theta),
+  y = DRAGON_Y + (2500 / 14870) * sin(.theta))
+rm(.theta)
+
 WARDS_FULL <- list(c(0.700, gg(0.645)), c(0.758, gg(0.618)), c(0.612, gg(0.758)))
 WARDS_THIN <- list(c(0.700, gg(0.645)), c(0.758, gg(0.618)))
 WARDS_ONE  <- list(c(0.700, gg(0.645)))
@@ -85,7 +92,7 @@ hull_df <- function(df) {
 
 # ── theme ─────────────────────────────────────────────────────────────────────
 INK  <- "#e2e8f0"; SUB <- "#94a3b8"
-BG   <- "#0f172a"; BG2  <- "#1e293b"
+BG   <- "#222327"; BG2  <- "#1e293b"
 
 theme_mapstate <- function(accent = "#64748b") {
   theme_void(base_size = 12) +
@@ -110,59 +117,45 @@ make_panel <- function(title, subtitle, accent,
                        ba_list, ba_roles,
                        bd_list = list(), bd_roles = character(0),
                        ra_list, ra_roles,
-                       rd_list = list(), rd_roles = character(0),
-                       wards   = list()) {
+                       rd_list = list(), rd_roles = character(0)) {
 
   ba_df <- make_df(ba_list, ba_roles, "blue", "alive")
   bd_df <- make_df(bd_list, bd_roles, "blue", "dead")
   ra_df <- make_df(ra_list, ra_roles, "red",  "alive")
   rd_df <- make_df(rd_list, rd_roles, "red",  "dead")
 
-  ward_df <- if (length(wards) > 0)
-    data.frame(x = vapply(wards, `[[`, 0.0, 1),
-               y = vapply(wards, `[[`, 0.0, 2))
-  else NULL
-
   p <- ggplot() +
     annotation_raster(map_r, xmin = 0, xmax = 1, ymin = 0, ymax = 1,
                       interpolate = TRUE) +
-    # objective influence radius — subtle glow only
-    annotate("point", x = DRAGON_X, y = DRAGON_Y,
-             size = 16, colour = "#fbbf24", alpha = 0.06) +
-    annotate("point", x = DRAGON_X, y = DRAGON_Y,
-             size = 10, colour = "#fbbf24", alpha = 0.10) +
+    # detection radius — actual 2500-unit circle in normalised map coords
+    geom_path(data = NEARBY_CIRCLE, aes(x = x, y = y), inherit.aes = FALSE,
+              colour = "#fbbf24", alpha = 0.50, linewidth = 0.8, linetype = "dashed") +
     coord_fixed(ratio = 1, xlim = c(0, 1), ylim = c(0, 1), expand = FALSE)
-
-  # Wards
-  if (!is.null(ward_df))
-    p <- p + geom_point(data = ward_df, aes(x = x, y = y),
-                        shape = 18, size = 4.5,
-                        colour = "#fde68a", stroke = 0)
 
   # Dead players — transparent X
   if (!is.null(bd_df))
     p <- p + geom_point(data = bd_df, aes(x = x, y = y),
-                        shape = 4, size = 6, colour = "#93c5fd",
-                        stroke = 2.0, alpha = 0.50)
+                        shape = 4, size = 5, colour = "#93c5fd",
+                        stroke = 1.6, alpha = 0.50)
   if (!is.null(rd_df))
     p <- p + geom_point(data = rd_df, aes(x = x, y = y),
-                        shape = 4, size = 6, colour = "#fca5a5",
-                        stroke = 2.0, alpha = 0.50)
+                        shape = 4, size = 5, colour = "#fca5a5",
+                        stroke = 1.6, alpha = 0.50)
 
   # Alive players
   if (!is.null(ra_df))
     p <- p + geom_point(data = ra_df, aes(x = x, y = y),
-                        shape = 21, size = 8,
-                        fill = "#ef4444", colour = "#7f1d1d", stroke = 1.8)
+                        shape = 21, size = 6.5,
+                        fill = "#ef4444", colour = "#7f1d1d", stroke = 1.5)
   if (!is.null(ba_df))
     p <- p + geom_point(data = ba_df, aes(x = x, y = y),
-                        shape = 21, size = 8,
-                        fill = "#3b82f6", colour = "#1e3a8a", stroke = 1.8)
+                        shape = 21, size = 6.5,
+                        fill = "#3b82f6", colour = "#1e3a8a", stroke = 1.5)
 
   # Dragon — small gold star
   p <- p +
     annotate("text", x = DRAGON_X, y = DRAGON_Y, label = "★",
-             size = 5, colour = "#fbbf24") +
+             size = 7, colour = "#fbbf24") +
     labs(title = title, subtitle = subtitle) +
     theme_mapstate(accent = accent)
 
@@ -179,33 +172,33 @@ p1 <- make_panel(
   ba_list  = ALL, ba_roles = ALL_R,
   ra_list  = list(R_JG_LANE,R_ADC_LANE,R_SUP_LANE,R_MID_LANE,R_TOP_LANE),
   ra_roles = ALL_R,
-  wards    = WARDS_FULL)
+  )
 
 p2 <- make_panel(
-  "Free Setup (Deaths)",
+  "Free Setup w/Deaths",
   "Team present  ·  Enemy absent  ·  Allied deaths in prior 60s", "#f59e0b",
   ba_list  = list(B_JG_DRAG,B_ADC_DRAG,B_SUP_DRAG), ba_roles = c("JG","ADC","SUP"),
   bd_list  = list(B_MID_LANE,B_TOP_LANE),            bd_roles = c("MID","TOP"),
   ra_list  = list(R_JG_LANE,R_ADC_LANE,R_SUP_LANE,R_MID_LANE,R_TOP_LANE),
   ra_roles = ALL_R,
-  wards    = WARDS_THIN)
+  )
 
 p3 <- make_panel(
   "Clean Contest",
-  "Both teams present  ·  Team not short-handed", "#a78bfa",
+  "Both teams present  ·  Team even or ahead in numbers", "#a78bfa",
   ba_list  = ALL, ba_roles = ALL_R,
   ra_list  = list(R_JG_DRAG,R_ADC_DRAG,R_SUP_DRAG,R_MID_DRAG,R_TOP_DRAG),
   ra_roles = ALL_R,
-  wards    = WARDS_ONE)
+  )
 
 p4 <- make_panel(
   "Disadvantaged",
-  "Both teams present  ·  Team had recent deaths or fewer alive", "#ef4444",
-  ba_list  = list(B_JG_DRAG,B_ADC_DRAG,B_SUP_DRAG), ba_roles = c("JG","ADC","SUP"),
-  bd_list  = list(B_MID_DRAG,B_TOP_DRAG),            bd_roles = c("MID","TOP"),
-  ra_list  = list(R_JG_DRAG,R_ADC_DRAG,R_SUP_DRAG,R_MID_DRAG,R_TOP_DRAG),
+  "3 blue vs 4 red near objective  ·  Locally outnumbered", "#ef4444",
+  ba_list  = list(B_JG_DRAG,B_ADC_DRAG,B_SUP_DRAG,B_TOP_LANE), ba_roles = c("JG","ADC","SUP","TOP"),
+  bd_list  = list(B_MID_DRAG),                                   bd_roles = c("MID"),
+  ra_list  = list(R_JG_DRAG,R_ADC_DRAG,R_SUP_DRAG,R_MID_DRAG,R_TOP_LANE),
   ra_roles = ALL_R,
-  wards    = WARDS_NONE)
+  )
 
 p5 <- make_panel(
   "Gave Away",
@@ -214,7 +207,7 @@ p5 <- make_panel(
   ba_roles = ALL_R,
   ra_list  = list(R_JG_DRAG,R_ADC_DRAG,R_SUP_DRAG,R_MID_DRAG,R_TOP_DRAG),
   ra_roles = ALL_R,
-  wards    = WARDS_NONE)
+  )
 
 p6 <- make_panel(
   "No Early Setup",
@@ -223,7 +216,7 @@ p6 <- make_panel(
   ba_roles = ALL_R,
   ra_list  = list(R_JG_LANE,R_ADC_LANE,R_SUP_LANE,R_MID_LANE,R_TOP_LANE),
   ra_roles = ALL_R,
-  wards    = WARDS_NONE)
+  )
 
 # ── legend panel ──────────────────────────────────────────────────────────────
 legend_data <- data.frame(
@@ -254,16 +247,10 @@ p_legend <- ggplot(legend_data, aes(x = x, y = y)) +
 layout <- (p1 | p2 | p3) / (p4 | p5 | p6) / p_legend +
   plot_layout(heights = c(1, 1, 0.14)) +
   plot_annotation(
-    title    = "Setup Profile Map States  ·  T-30 snapshot  ·  synthetic positions",
-    subtitle = "V4: R / ggplot2 + patchwork  ·  objective radius  ·  synthetic positions",
-    caption  = "Blue circles = blue team alive  ·  Red circles = red team alive  ·  ✕ = dead  ·  ★ = dragon spawn",
-    theme    = theme(
-      plot.title    = element_text(face = "bold", colour = INK, size = 14,
-                                   margin = margin(b = 4)),
-      plot.subtitle = element_text(colour = SUB, size = 10,
-                                   margin = margin(b = 8)),
-      plot.caption  = element_text(colour = "#475569", size = 8,
-                                   hjust = 0, margin = margin(t = 6)),
+    title = "Setup Profile Map States  ·  T-30 snapshot  ·  synthetic positions",
+    theme = theme(
+      plot.title      = element_text(face = "bold", colour = INK, size = 14,
+                                     margin = margin(b = 4)),
       plot.background = element_rect(fill = BG, colour = NA),
       plot.margin     = margin(16, 16, 10, 16),
     )
